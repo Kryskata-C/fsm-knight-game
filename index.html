@@ -25,7 +25,7 @@ cursor: crosshair;
 }
 #hud {
 display: flex;
-gap: 30px;
+gap: 20px;
 margin-bottom: 12px;
 padding: 10px 24px;
 background: rgba(20, 20, 40, 0.9);
@@ -33,9 +33,17 @@ border-radius: 8px;
 border: 1px solid #2a2a4a;
 font-size: 14px;
 align-items: center;
+flex-wrap: wrap;
+justify-content: center;
 }
 #hud .label { color: #888; margin-right: 4px; }
 #hud .value { font-weight: bold; }
+#hud .weapon-display {
+padding: 2px 10px;
+border-radius: 4px;
+border: 1px solid #555;
+font-size: 12px;
+}
 #fsm-panel {
 display: flex;
 gap: 24px;
@@ -130,8 +138,8 @@ box-shadow: 0 6px 20px rgba(100, 60, 200, 0.4);
 <div id="start-screen">
     <h1>Knight vs Slimes</h1>
     <p>Defeat waves of slimes in this FSM-driven arena!</p>
-    <p style="color:#666; font-size:13px; margin-top:12px;">WASD / Arrows - Move &nbsp;|&nbsp; Left Click - Attack &nbsp;|&nbsp; Right Click / Shift - Block</p>
-    <p style="color:#666; font-size:13px;">Each entity uses a Finite State Machine for behavior</p>
+    <p style="color:#666; font-size:13px; margin-top:12px;">WASD - Move | Left Click - Attack | Right Click/Shift - Block | Space - Dodge Roll</p>
+    <p style="color:#666; font-size:13px;">Tab - Skill Tree | C - Skins | Walk over drops to pick up weapons</p>
     <button class="btn" onclick="startGame()">Start Game</button>
 </div>
 
@@ -139,6 +147,7 @@ box-shadow: 0 6px 20px rgba(100, 60, 200, 0.4);
     <h1>Game Over</h1>
     <p>Wave reached: <span id="final-wave">1</span></p>
     <p>Slimes defeated: <span id="final-kills">0</span></p>
+    <p>XP earned: <span id="final-xp">0</span></p>
     <button class="btn" onclick="startGame()">Play Again</button>
 </div>
 
@@ -147,6 +156,9 @@ box-shadow: 0 6px 20px rgba(100, 60, 200, 0.4);
     <div><span class="label">Wave:</span> <span class="value" id="wave-display">1</span></div>
     <div><span class="label">Kills:</span> <span class="value" id="kills-display">0</span></div>
     <div><span class="label">Combo:</span> <span class="value" id="combo-display">0</span></div>
+    <div><span class="label">XP:</span> <span class="value" id="xp-display">0</span></div>
+    <div><span class="label">SP:</span> <span class="value" id="sp-display" style="color:#ffd700">0</span></div>
+    <div class="weapon-display" id="weapon-hud" style="border-color:#aaa">Iron Sword</div>
 </div>
 
 <canvas id="gameCanvas" width="900" height="560"></canvas>
@@ -166,7 +178,7 @@ box-shadow: 0 6px 20px rgba(100, 60, 200, 0.4);
     </div>
 </div>
 
-<div id="controls-hint">WASD/Arrows: Move | Left Click: Attack | Right Click/Shift: Block</div>
+<div id="controls-hint">WASD: Move | LClick: Attack | RClick/Shift: Block | Space: Dodge | Tab: Skills | C: Skins</div>
 
 <script>
 // ========== AUDIO SYSTEM ==========
@@ -209,6 +221,10 @@ const SFX = {
     death:    () => { [300, 250, 200, 150, 100].forEach((f, i) => setTimeout(() => playTone(f, 0.3, 'sawtooth', 0.2), i * 150)); },
     combo:    () => { playTone(880, 0.1, 'triangle', 0.12); setTimeout(() => playTone(1100, 0.15, 'triangle', 0.1), 60); },
     slimeAtk: () => { playTone(120, 0.15, 'sine', 0.15); playNoise(0.08, 0.1); },
+    levelUp:  () => { [523, 659, 784, 1047, 1319].forEach((f, i) => setTimeout(() => playTone(f, 0.25, 'triangle', 0.18), i * 80)); },
+    pickup:   () => { playTone(660, 0.1, 'triangle', 0.15); setTimeout(() => playTone(880, 0.15, 'triangle', 0.12), 60); },
+    boss:     () => { [100, 80, 100, 120, 100].forEach((f, i) => setTimeout(() => playTone(f, 0.4, 'sawtooth', 0.25), i * 200)); },
+    dodge:    () => { playTone(500, 0.06, 'sine', 0.12); playNoise(0.04, 0.08); },
 };
 
 // ========== CANVAS ==========
@@ -220,7 +236,13 @@ const W = canvas.width, H = canvas.height;
 const keys = {};
 let mouseX = 0, mouseY = 0, mouseDown = false, rightDown = false;
 
-window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; e.preventDefault(); });
+window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if (['tab', ' '].includes(e.key.toLowerCase())) e.preventDefault();
+    if (e.key.toLowerCase() === 'tab' && game.running) toggleSkillTree();
+    if (e.key.toLowerCase() === 'c' && game.running) toggleSkinMenu();
+    if (e.key.toLowerCase() === 'escape') { showSkillTree = false; showSkinMenu = false; }
+});
 window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 canvas.addEventListener('mousemove', e => {
     const r = canvas.getBoundingClientRect();
@@ -229,6 +251,8 @@ canvas.addEventListener('mousemove', e => {
 });
 canvas.addEventListener('mousedown', e => {
     e.preventDefault();
+    if (showSkillTree) { skillTree.handleClick(mouseX, mouseY); return; }
+    if (showSkinMenu) { skinManager.handleClick(mouseX, mouseY); return; }
     if (e.button === 0) mouseDown = true;
     if (e.button === 2) rightDown = true;
 });
@@ -305,6 +329,107 @@ function drawFloatingTexts() {
     ctx.globalAlpha = 1;
 }
 
+// ========== JUICE / GAME FEEL ==========
+let screenFlash = null;         // { color, timer }
+let hitFreeze = 0;              // pause game for N seconds on big hits
+let screenShakeAmount = 0;      // camera shake intensity
+let killStreak = 0;             // kills in quick succession
+let killStreakTimer = 0;        // resets streak after 2s
+let slowMo = 0;                 // slow-motion timer
+let slowMoFactor = 1;           // time scale
+
+const STREAK_MESSAGES = ['', '', 'DOUBLE KILL', 'TRIPLE KILL', 'MEGA KILL', 'ULTRA KILL', 'GODLIKE', 'UNSTOPPABLE'];
+const STREAK_COLORS = ['', '', '#ffaa00', '#ff6600', '#ff2200', '#ff00ff', '#ff0088', '#ff0044'];
+
+function triggerScreenShake(amount) {
+    screenShakeAmount = Math.max(screenShakeAmount, amount);
+}
+
+function triggerHitFreeze(duration) {
+    hitFreeze = Math.max(hitFreeze, duration);
+}
+
+function triggerSlowMo(duration, factor = 0.3) {
+    slowMo = duration;
+    slowMoFactor = factor;
+}
+
+function addKillStreak() {
+    killStreak++;
+    killStreakTimer = 2.0;
+    if (killStreak >= 2 && killStreak < STREAK_MESSAGES.length) {
+        const msg = STREAK_MESSAGES[killStreak];
+        const color = STREAK_COLORS[killStreak];
+        spawnText(W / 2, H / 2 + 60, msg, color);
+        triggerScreenShake(killStreak * 2);
+        if (killStreak >= 4) triggerSlowMo(0.3, 0.2);
+        // Big particle burst
+        for (let i = 0; i < killStreak * 5; i++) {
+            const ang = Math.random() * Math.PI * 2;
+            const spd = Math.random() * 6 + 2;
+            particles.push({
+                x: knight.x, y: knight.y,
+                vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
+                life: 1, decay: 0.015, size: 3 + Math.random() * 4,
+                color: color
+            });
+        }
+    } else if (killStreak >= STREAK_MESSAGES.length) {
+        spawnText(W / 2, H / 2 + 60, `${killStreak}x KILL STREAK!`, '#ff0044');
+        triggerScreenShake(12);
+        triggerSlowMo(0.4, 0.15);
+    }
+}
+
+function drawScreenFlash() {
+    if (screenFlash && screenFlash.timer > 0) {
+        ctx.fillStyle = screenFlash.color;
+        ctx.globalAlpha = screenFlash.timer * 0.4;
+        ctx.fillRect(0, 0, W, H);
+        ctx.globalAlpha = 1;
+    }
+}
+
+function drawKillStreakHUD() {
+    if (killStreak >= 2 && killStreakTimer > 0) {
+        ctx.save();
+        ctx.font = 'bold 18px Arial';
+        ctx.textAlign = 'center';
+        const alpha = Math.min(1, killStreakTimer);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = killStreak < STREAK_COLORS.length ? STREAK_COLORS[killStreak] : '#ff0044';
+        ctx.fillText(`${killStreak}x Streak`, W / 2, H - 20);
+        ctx.globalAlpha = 1;
+        ctx.restore();
+    }
+}
+
+// Enhanced particles for juicier effects
+function spawnBurstParticles(x, y, color, count = 12, speed = 5, size = 5) {
+    for (let i = 0; i < count; i++) {
+        const ang = (Math.PI * 2 / count) * i + Math.random() * 0.3;
+        const spd = Math.random() * speed + speed * 0.5;
+        particles.push({
+            x, y, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd - 1,
+            life: 1, decay: 0.012 + Math.random() * 0.015,
+            size: size * 0.5 + Math.random() * size, color
+        });
+    }
+}
+
+function spawnSlashTrail(x, y, angle, range, color = '#ffffff') {
+    for (let i = 0; i < 8; i++) {
+        const d = range * (0.3 + Math.random() * 0.7);
+        const spread = (Math.random() - 0.5) * 0.6;
+        particles.push({
+            x: x + Math.cos(angle + spread) * d,
+            y: y + Math.sin(angle + spread) * d,
+            vx: Math.cos(angle + spread) * 2, vy: Math.sin(angle + spread) * 2,
+            life: 0.8, decay: 0.04, size: 2 + Math.random() * 3, color
+        });
+    }
+}
+
 // ========== FSM BASE ==========
 class FSM {
     constructor(owner, states, initial) {
@@ -336,6 +461,807 @@ class FSM {
 let lastTransition = '...';
 function logTransition(msg) { lastTransition = msg; }
 
+// ========== STATUS EFFECTS ==========
+const STATUS = { BURN: 'burn', POISON: 'poison', SLOW: 'slow', STUN: 'stun' };
+
+function applyStatus(target, type, duration, value = 0) {
+    if (!target.statusEffects) target.statusEffects = [];
+    // Don't stack same type, refresh instead
+    const existing = target.statusEffects.find(e => e.type === type);
+    if (existing) { existing.timer = duration; existing.value = value; return; }
+    target.statusEffects.push({ type, timer: duration, value, tick: 0 });
+}
+
+function updateStatusEffects(target, dt) {
+    if (!target.statusEffects) return;
+    for (let i = target.statusEffects.length - 1; i >= 0; i--) {
+        const e = target.statusEffects[i];
+        e.timer -= dt;
+        if (e.type === STATUS.BURN || e.type === STATUS.POISON) {
+            e.tick += dt;
+            if (e.tick >= 0.5) {
+                e.tick -= 0.5;
+                const dmg = Math.ceil(e.value * 0.5);
+                target.hp -= dmg;
+                const color = e.type === STATUS.BURN ? '#ff6600' : '#44ff44';
+                spawnParticles(target.x, target.y, color, 2, 1);
+                if (target.hp <= 0 && target.fsm && target.fsm.current !== 'DEAD') {
+                    target.hp = 0;
+                    target.fsm.transition('DEAD');
+                }
+            }
+        }
+        if (e.timer <= 0) target.statusEffects.splice(i, 1);
+    }
+}
+
+function hasStatus(target, type) {
+    return target.statusEffects?.some(e => e.type === type);
+}
+
+function getSpeedMultiplier(target) {
+    if (hasStatus(target, STATUS.SLOW)) return 0.5;
+    if (hasStatus(target, STATUS.STUN)) return 0;
+    return 1;
+}
+
+// ========== WEAPON SYSTEM ==========
+const RARITY = { COMMON: 'common', RARE: 'rare', EPIC: 'epic', LEGENDARY: 'legendary' };
+const RARITY_COLORS = { common: '#aaaaaa', rare: '#4488ff', epic: '#aa44ff', legendary: '#ffaa00' };
+
+const WEAPONS = [
+    {
+        id: 'iron_sword', name: 'Iron Sword', type: 'sword', rarity: RARITY.COMMON,
+        damage: 25, range: 65, cooldown: 0.3, arc: Math.PI / 3,
+        desc: 'Basic starter sword.',
+        onHit: null, onKill: null,
+        drawBlade(ctx, progress) {
+            ctx.strokeStyle = '#ccc'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(38, 0); ctx.stroke();
+            ctx.strokeStyle = '#aa8833'; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(14, -5); ctx.lineTo(14, 5); ctx.stroke();
+        }
+    },
+    {
+        id: 'flame_blade', name: 'Flame Blade', type: 'sword', rarity: RARITY.RARE,
+        damage: 30, range: 65, cooldown: 0.3, arc: Math.PI / 3,
+        desc: 'Burns enemies for 5 DPS for 3s.',
+        onHit(target) { applyStatus(target, STATUS.BURN, 3, 5); },
+        onKill: null,
+        drawBlade(ctx, progress) {
+            ctx.shadowColor = '#ff4400'; ctx.shadowBlur = 8;
+            ctx.strokeStyle = '#ff6622'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(38, 0); ctx.stroke();
+            // Flame flicker
+            for (let i = 0; i < 3; i++) {
+                const fx = 18 + i * 7, fy = (Math.random() - 0.5) * 8;
+                ctx.fillStyle = `rgba(255,${100 + Math.random()*100},0,0.6)`;
+                ctx.beginPath(); ctx.arc(fx, fy, 2 + Math.random() * 2, 0, Math.PI * 2); ctx.fill();
+            }
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#aa4400'; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(14, -5); ctx.lineTo(14, 5); ctx.stroke();
+        }
+    },
+    {
+        id: 'frost_brand', name: 'Frost Brand', type: 'sword', rarity: RARITY.RARE,
+        damage: 22, range: 70, cooldown: 0.3, arc: Math.PI / 3,
+        desc: '30% chance to slow enemies 50% for 2s.',
+        onHit(target) { if (Math.random() < 0.3) { applyStatus(target, STATUS.SLOW, 2); spawnParticles(target.x, target.y, '#88ddff', 3); } },
+        onKill: null,
+        drawBlade(ctx) {
+            ctx.shadowColor = '#44ccff'; ctx.shadowBlur = 6;
+            ctx.strokeStyle = '#aaeeff'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(40, 0); ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#446688'; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(14, -5); ctx.lineTo(14, 5); ctx.stroke();
+        }
+    },
+    {
+        id: 'excalibur', name: 'Excalibur', type: 'sword', rarity: RARITY.LEGENDARY,
+        damage: 45, range: 75, cooldown: 0.3, arc: Math.PI / 3,
+        desc: 'Heals 3 HP per hit.',
+        onHit(target, k) { k.hp = Math.min(k.maxHp, k.hp + 3); spawnText(k.x, k.y - 35, '+3', '#44ff88'); },
+        onKill: null,
+        drawBlade(ctx) {
+            ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 12;
+            ctx.strokeStyle = '#ffeebb'; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(42, 0); ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 5;
+            ctx.beginPath(); ctx.moveTo(14, -6); ctx.lineTo(14, 6); ctx.stroke();
+        }
+    },
+    {
+        id: 'battle_axe', name: 'Battle Axe', type: 'axe', rarity: RARITY.COMMON,
+        damage: 35, range: 55, cooldown: 0.4, arc: Math.PI,
+        desc: 'Slow but cleaves in 180 degree arc.',
+        onHit: null, onKill: null,
+        drawBlade(ctx) {
+            ctx.strokeStyle = '#999'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(30, 0); ctx.stroke();
+            ctx.fillStyle = '#aaa';
+            ctx.beginPath(); ctx.moveTo(28, -10); ctx.quadraticCurveTo(38, 0, 28, 10); ctx.lineTo(26, 6); ctx.quadraticCurveTo(32, 0, 26, -6); ctx.fill();
+            ctx.strokeStyle = '#663300'; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(10, -4); ctx.lineTo(10, 4); ctx.stroke();
+        }
+    },
+    {
+        id: 'berserker_axe', name: 'Berserker Axe', type: 'axe', rarity: RARITY.RARE,
+        damage: 40, range: 55, cooldown: 0.4, arc: Math.PI,
+        desc: '+1% damage per 1% missing HP.',
+        onHit: null, onKill: null,
+        getDamage(k) { const missingPct = 1 - (k.hp / k.maxHp); return Math.floor(this.damage * (1 + missingPct)); },
+        drawBlade(ctx) {
+            ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 6;
+            ctx.strokeStyle = '#880000'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(30, 0); ctx.stroke();
+            ctx.fillStyle = '#cc2222';
+            ctx.beginPath(); ctx.moveTo(28, -12); ctx.quadraticCurveTo(40, 0, 28, 12); ctx.lineTo(26, 7); ctx.quadraticCurveTo(34, 0, 26, -7); ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#441100'; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(10, -4); ctx.lineTo(10, 4); ctx.stroke();
+        }
+    },
+    {
+        id: 'storm_axe', name: 'Storm Axe', type: 'axe', rarity: RARITY.EPIC,
+        damage: 38, range: 60, cooldown: 0.4, arc: Math.PI,
+        desc: 'Every 3rd hit zaps all nearby enemies for 15.',
+        hitCount: 0,
+        onHit(target, k) {
+            this.hitCount = (this.hitCount || 0) + 1;
+            if (this.hitCount % 3 === 0) {
+                slimes.forEach(s => {
+                    if (s.hp > 0 && dist(k, s) < 120) {
+                        s.hp -= 15;
+                        spawnParticles(s.x, s.y, '#ffff00', 4);
+                        spawnText(s.x, s.y - 15, '-15', '#ffff00');
+                        if (s.hp <= 0) { s.hp = 0; s.fsm.transition('DEAD'); }
+                    }
+                });
+                spawnText(k.x, k.y - 40, 'ZAP!', '#ffff00');
+            }
+        },
+        onKill: null,
+        drawBlade(ctx) {
+            ctx.shadowColor = '#ffff00'; ctx.shadowBlur = 8;
+            ctx.strokeStyle = '#888'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(30, 0); ctx.stroke();
+            ctx.fillStyle = '#aaaaff';
+            ctx.beginPath(); ctx.moveTo(28, -11); ctx.quadraticCurveTo(39, 0, 28, 11); ctx.lineTo(26, 6); ctx.quadraticCurveTo(33, 0, 26, -6); ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#444488'; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(10, -4); ctx.lineTo(10, 4); ctx.stroke();
+        }
+    },
+    {
+        id: 'steel_dagger', name: 'Steel Dagger', type: 'dagger', rarity: RARITY.COMMON,
+        damage: 15, range: 45, cooldown: 0.18, arc: Math.PI / 3,
+        desc: 'Fast attacks, lower damage.',
+        onHit: null, onKill: null,
+        drawBlade(ctx) {
+            ctx.strokeStyle = '#ccc'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(28, 0); ctx.stroke();
+            ctx.strokeStyle = '#886633'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(12, -3); ctx.lineTo(12, 3); ctx.stroke();
+        }
+    },
+    {
+        id: 'venom_dagger', name: 'Venom Dagger', type: 'dagger', rarity: RARITY.RARE,
+        damage: 12, range: 45, cooldown: 0.18, arc: Math.PI / 3,
+        desc: 'Poisons enemies for 8 DPS over 4s.',
+        onHit(target) { applyStatus(target, STATUS.POISON, 4, 8); },
+        onKill: null,
+        drawBlade(ctx) {
+            ctx.shadowColor = '#00ff00'; ctx.shadowBlur = 4;
+            ctx.strokeStyle = '#44cc44'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(28, 0); ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#224411'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(12, -3); ctx.lineTo(12, 3); ctx.stroke();
+        }
+    },
+    {
+        id: 'phase_blade', name: 'Phase Blade', type: 'dagger', rarity: RARITY.EPIC,
+        damage: 18, range: 50, cooldown: 0.18, arc: Math.PI / 3,
+        desc: 'Attacks pierce through all enemies in line.',
+        piercing: true,
+        onHit: null, onKill: null,
+        drawBlade(ctx) {
+            ctx.shadowColor = '#aa44ff'; ctx.shadowBlur = 8;
+            ctx.strokeStyle = 'rgba(170,68,255,0.8)'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(32, 0); ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#663399'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(12, -3); ctx.lineTo(12, 3); ctx.stroke();
+        }
+    },
+    {
+        id: 'war_hammer', name: 'War Hammer', type: 'hammer', rarity: RARITY.RARE,
+        damage: 50, range: 50, cooldown: 0.5, arc: Math.PI / 2.5,
+        desc: 'Very slow but stuns for 1.5s.',
+        onHit(target) { applyStatus(target, STATUS.STUN, 1.5); },
+        onKill: null,
+        drawBlade(ctx) {
+            ctx.strokeStyle = '#888'; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(26, 0); ctx.stroke();
+            ctx.fillStyle = '#777';
+            ctx.fillRect(24, -9, 12, 18);
+            ctx.strokeStyle = '#555'; ctx.lineWidth = 1;
+            ctx.strokeRect(24, -9, 12, 18);
+            ctx.strokeStyle = '#663300'; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(10, -3); ctx.lineTo(10, 3); ctx.stroke();
+        }
+    },
+    {
+        id: 'soul_reaper', name: 'Soul Reaper', type: 'sword', rarity: RARITY.LEGENDARY,
+        damage: 35, range: 70, cooldown: 0.3, arc: Math.PI / 3,
+        desc: 'Kills heal 15% HP and boost speed 30% for 2s.',
+        onHit: null,
+        onKill(target, k) {
+            const heal = Math.floor(k.maxHp * 0.15);
+            k.hp = Math.min(k.maxHp, k.hp + heal);
+            spawnText(k.x, k.y - 40, `+${heal} HP`, '#44ff88');
+            k.speedBoostTimer = 2;
+        },
+        drawBlade(ctx) {
+            ctx.shadowColor = '#00ff88'; ctx.shadowBlur = 10;
+            ctx.strokeStyle = '#44ffaa'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(40, 0); ctx.stroke();
+            // Curved blade tip
+            ctx.beginPath(); ctx.arc(38, -4, 6, 0.5, Math.PI); ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#226644'; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(14, -5); ctx.lineTo(14, 5); ctx.stroke();
+        }
+    }
+];
+
+// Weapon drops on ground
+let weaponDrops = [];
+
+function createWeaponDrop(x, y, weapon, immunity = 0) {
+    weaponDrops.push({
+        x, y, weapon, timer: 0,
+        bob: Math.random() * Math.PI * 2,
+        pickupImmunity: immunity
+    });
+}
+
+function rollWeaponDrop(x, y, isBoss = false, isElite = false) {
+    let chance = 0.05;
+    if (isElite) chance = 0.2;
+    if (isBoss) chance = 1.0;
+    if (Math.random() > chance) return;
+
+    let pool;
+    if (isBoss) {
+        pool = WEAPONS.filter(w => w.rarity === RARITY.EPIC || w.rarity === RARITY.LEGENDARY);
+    } else {
+        const roll = Math.random() * 100;
+        let rarity;
+        if (roll < 3) rarity = RARITY.LEGENDARY;
+        else if (roll < 15) rarity = RARITY.EPIC;
+        else if (roll < 50) rarity = RARITY.RARE;
+        else rarity = RARITY.COMMON;
+        pool = WEAPONS.filter(w => w.rarity === rarity);
+    }
+    if (pool.length === 0) pool = WEAPONS;
+    const weapon = pool[Math.floor(Math.random() * pool.length)];
+    createWeaponDrop(x, y, weapon);
+}
+
+function updateWeaponDrops(dt) {
+    weaponDrops.forEach(d => {
+        d.timer += dt;
+        d.bob += dt * 2;
+        if (d.pickupImmunity > 0) d.pickupImmunity -= dt;
+    });
+}
+
+function drawWeaponDrops() {
+    weaponDrops.forEach(d => {
+        const by = d.y + Math.sin(d.bob) * 5;
+        const rc = RARITY_COLORS[d.weapon.rarity];
+        const immune = d.pickupImmunity > 0;
+
+        // Pulsing glow ring
+        ctx.save();
+        ctx.shadowColor = rc;
+        ctx.shadowBlur = 15 + Math.sin(d.timer * 4) * 8;
+
+        // Rotating sparkles for rare+
+        if (d.weapon.rarity !== RARITY.COMMON) {
+            const sparkleCount = d.weapon.rarity === RARITY.LEGENDARY ? 6 : d.weapon.rarity === RARITY.EPIC ? 4 : 2;
+            for (let i = 0; i < sparkleCount; i++) {
+                const a = d.timer * 2 + (Math.PI * 2 / sparkleCount) * i;
+                const sr = 16 + Math.sin(d.timer * 3 + i) * 3;
+                ctx.fillStyle = rc;
+                ctx.globalAlpha = 0.5 + Math.sin(d.timer * 5 + i) * 0.3;
+                ctx.beginPath();
+                ctx.arc(d.x + Math.cos(a) * sr, by + Math.sin(a) * sr, 1.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        }
+
+        // Item circle
+        ctx.fillStyle = immune ? 'rgba(40,40,60,0.5)' : 'rgba(20,20,40,0.8)';
+        ctx.beginPath();
+        ctx.arc(d.x, by, 12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = immune ? '#555' : rc;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Weapon icon
+        ctx.translate(d.x, by);
+        ctx.scale(0.4, 0.4);
+        d.weapon.drawBlade(ctx, 0);
+        ctx.restore();
+
+        // Name label with rarity background
+        ctx.fillStyle = rc;
+        ctx.font = 'bold 10px Arial';
+        ctx.textAlign = 'center';
+        ctx.globalAlpha = immune ? 0.4 : 1;
+        ctx.fillText(d.weapon.name, d.x, by + 20);
+        ctx.globalAlpha = 1;
+    });
+}
+
+function checkWeaponPickup(k) {
+    for (let i = weaponDrops.length - 1; i >= 0; i--) {
+        const d = weaponDrops[i];
+        if (d.pickupImmunity > 0) continue;
+        if (dist(k, d) < 30) {
+            const oldWeapon = k.weapon;
+            k.weapon = d.weapon;
+            weaponDrops.splice(i, 1);
+            // Drop old weapon with 1.5s immunity so it can't be instantly re-picked
+            if (oldWeapon.id !== 'iron_sword') {
+                createWeaponDrop(k.x + (Math.random() - 0.5) * 60, k.y + (Math.random() - 0.5) * 60, oldWeapon, 1.5);
+            }
+            SFX.pickup();
+            spawnText(k.x, k.y - 40, d.weapon.name + '!', RARITY_COLORS[d.weapon.rarity]);
+            // Juice: screen flash on pickup
+            screenFlash = { color: RARITY_COLORS[d.weapon.rarity], timer: 0.2 };
+            return;
+        }
+    }
+}
+
+// ========== SKILL TREE SYSTEM ==========
+let showSkillTree = false;
+function toggleSkillTree() { showSkillTree = !showSkillTree; showSkinMenu = false; }
+
+const SKILL_DATA = {
+    // Combat branch
+    powerStrike:  { name: 'Power Strike', branch: 'combat', maxRank: 3, prereqs: [], tier: 0, desc: '+15% damage per rank' },
+    whirlwind:    { name: 'Whirlwind', branch: 'combat', maxRank: 1, prereqs: ['powerStrike'], tier: 1, desc: '360 degree attacks' },
+    criticalHit:  { name: 'Critical Hit', branch: 'combat', maxRank: 3, prereqs: ['powerStrike'], tier: 1, desc: '10% crit chance/rank, 2x dmg' },
+    berserker:    { name: 'Berserker', branch: 'combat', maxRank: 1, prereqs: ['criticalHit'], tier: 2, desc: 'Below 30% HP: +50% damage & speed' },
+    execute:      { name: 'Execute', branch: 'combat', maxRank: 1, prereqs: ['criticalHit'], tier: 2, desc: 'Enemies <20% HP take 3x damage' },
+    // Defense branch
+    ironShield:   { name: 'Iron Shield', branch: 'defense', maxRank: 3, prereqs: [], tier: 0, desc: '+10% block reduction/rank' },
+    regen:        { name: 'Regeneration', branch: 'defense', maxRank: 3, prereqs: ['ironShield'], tier: 1, desc: 'Heal 1 HP every 5/4/3s' },
+    thorns:       { name: 'Thorns', branch: 'defense', maxRank: 2, prereqs: ['ironShield'], tier: 1, desc: 'Reflect 15%/25% when blocking' },
+    fortify:      { name: 'Fortify', branch: 'defense', maxRank: 1, prereqs: ['thorns'], tier: 2, desc: 'Block 3 hits, next attack 2x' },
+    secondWind:   { name: 'Second Wind', branch: 'defense', maxRank: 1, prereqs: ['regen'], tier: 2, desc: 'Revive once/wave at 30% HP' },
+    // Agility branch
+    swiftFeet:    { name: 'Swift Feet', branch: 'agility', maxRank: 3, prereqs: [], tier: 0, desc: '+10% move speed/rank' },
+    dodgeRoll:    { name: 'Dodge Roll', branch: 'agility', maxRank: 1, prereqs: ['swiftFeet'], tier: 1, desc: 'Space to roll (0.5s invuln, 2s CD)' },
+    comboMaster:  { name: 'Combo Master', branch: 'agility', maxRank: 3, prereqs: ['swiftFeet'], tier: 1, desc: '+1s combo timer/rank' },
+    lifeSteal:    { name: 'Life Steal', branch: 'agility', maxRank: 2, prereqs: ['comboMaster'], tier: 2, desc: 'Heal 5%/10% of damage dealt' },
+    shadowStrike: { name: 'Shadow Strike', branch: 'agility', maxRank: 1, prereqs: ['dodgeRoll'], tier: 2, desc: 'After dodge, 3x damage for 1s' },
+};
+
+const BRANCH_COLORS = { combat: '#ff4444', defense: '#4488ff', agility: '#44cc44' };
+
+class SkillTree {
+    constructor() {
+        this.ranks = {};
+        for (const id in SKILL_DATA) this.ranks[id] = 0;
+        this.hoveredSkill = null;
+        this.nodePositions = {};
+        this.computeLayout();
+    }
+
+    computeLayout() {
+        const cx = W / 2, cy = H / 2;
+        const branches = { combat: [], defense: [], agility: [] };
+        for (const [id, data] of Object.entries(SKILL_DATA)) {
+            branches[data.branch].push({ id, ...data });
+        }
+        // Layout each branch in a column
+        const cols = { combat: cx - 200, defense: cx, agility: cx + 200 };
+        for (const [branch, skills] of Object.entries(branches)) {
+            const sorted = skills.sort((a, b) => a.tier - b.tier);
+            let tierCounts = {};
+            sorted.forEach(s => { tierCounts[s.tier] = (tierCounts[s.tier] || 0) + 1; });
+            let tierIndex = {};
+            sorted.forEach(s => {
+                const tier = s.tier;
+                tierIndex[tier] = (tierIndex[tier] || 0);
+                const count = tierCounts[tier];
+                const xOff = (tierIndex[tier] - (count - 1) / 2) * 70;
+                this.nodePositions[s.id] = {
+                    x: cols[branch] + xOff,
+                    y: 130 + tier * 110
+                };
+                tierIndex[tier]++;
+            });
+        }
+    }
+
+    getRank(id) { return this.ranks[id] || 0; }
+    hasSkill(id) { return this.getRank(id) > 0; }
+
+    canUnlock(id) {
+        const data = SKILL_DATA[id];
+        if (this.ranks[id] >= data.maxRank) return false;
+        if ((knight?.skillPoints || 0) <= 0) return false;
+        for (const pre of data.prereqs) {
+            if (this.ranks[pre] <= 0) return false;
+        }
+        return true;
+    }
+
+    addPoint(id) {
+        if (!this.canUnlock(id)) return false;
+        this.ranks[id]++;
+        knight.skillPoints--;
+        SFX.levelUp();
+        return true;
+    }
+
+    // Skill effects
+    getDamageMultiplier(k) {
+        let mult = 1;
+        mult += this.getRank('powerStrike') * 0.15;
+        if (this.hasSkill('berserker') && k.hp < k.maxHp * 0.3) mult += 0.5;
+        if (k.shadowStrikeTimer > 0) mult *= 3;
+        if (k.fortifyReady) mult *= 2;
+        return mult;
+    }
+
+    getAttackArc() {
+        return this.hasSkill('whirlwind') ? Math.PI * 2 : null;
+    }
+
+    getCritChance() { return this.getRank('criticalHit') * 0.1; }
+
+    getBlockReduction() { return 0.8 + this.getRank('ironShield') * 0.1; }
+
+    getSpeedMultiplier(k) {
+        let mult = 1 + this.getRank('swiftFeet') * 0.1;
+        if (this.hasSkill('berserker') && k.hp < k.maxHp * 0.3) mult += 0.5;
+        if (k.speedBoostTimer > 0) mult *= 1.3;
+        return mult;
+    }
+
+    getComboTimerBonus() { return this.getRank('comboMaster'); }
+
+    getLifeStealPct() { return this.getRank('lifeSteal') * 0.05; }
+
+    getThornsPct() { return this.getRank('thorns') * 0.15 - (this.getRank('thorns') > 1 ? 0.05 : 0); }
+
+    getRegenInterval() {
+        const r = this.getRank('regen');
+        if (r === 0) return 0;
+        return [0, 5, 4, 3][r];
+    }
+
+    handleClick(mx, my) {
+        for (const [id, pos] of Object.entries(this.nodePositions)) {
+            if (Math.hypot(mx - pos.x, my - pos.y) < 24) {
+                this.addPoint(id);
+                return;
+            }
+        }
+    }
+
+    draw(ctx) {
+        ctx.fillStyle = 'rgba(10, 10, 25, 0.95)';
+        ctx.fillRect(0, 0, W, H);
+
+        // Title
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 28px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Skill Tree', W / 2, 40);
+        ctx.font = '14px Arial';
+        ctx.fillStyle = '#ffd700';
+        ctx.fillText(`Skill Points: ${knight?.skillPoints || 0}`, W / 2, 65);
+        ctx.fillStyle = '#666';
+        ctx.font = '12px Arial';
+        ctx.fillText('Click to invest points | Tab or Esc to close', W / 2, 85);
+
+        // Branch labels
+        ctx.font = 'bold 16px Arial';
+        ctx.fillStyle = BRANCH_COLORS.combat; ctx.fillText('COMBAT', W / 2 - 200, 105);
+        ctx.fillStyle = BRANCH_COLORS.defense; ctx.fillText('DEFENSE', W / 2, 105);
+        ctx.fillStyle = BRANCH_COLORS.agility; ctx.fillText('AGILITY', W / 2 + 200, 105);
+
+        // Draw connections
+        for (const [id, data] of Object.entries(SKILL_DATA)) {
+            const pos = this.nodePositions[id];
+            for (const pre of data.prereqs) {
+                const ppos = this.nodePositions[pre];
+                ctx.strokeStyle = this.ranks[pre] > 0 ? BRANCH_COLORS[data.branch] : '#333';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(ppos.x, ppos.y);
+                ctx.lineTo(pos.x, pos.y);
+                ctx.stroke();
+            }
+        }
+
+        // Draw nodes
+        for (const [id, data] of Object.entries(SKILL_DATA)) {
+            const pos = this.nodePositions[id];
+            const rank = this.ranks[id];
+            const maxed = rank >= data.maxRank;
+            const available = this.canUnlock(id);
+            const branchColor = BRANCH_COLORS[data.branch];
+
+            // Node circle
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, 22, 0, Math.PI * 2);
+            if (maxed) {
+                ctx.fillStyle = branchColor;
+                ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 10;
+            } else if (rank > 0) {
+                ctx.fillStyle = branchColor + '88';
+            } else if (available) {
+                ctx.fillStyle = '#332200';
+                ctx.shadowColor = '#ffaa00'; ctx.shadowBlur = 6;
+            } else {
+                ctx.fillStyle = '#222';
+            }
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = maxed ? '#ffd700' : available ? '#ffaa00' : rank > 0 ? branchColor : '#444';
+            ctx.lineWidth = maxed ? 3 : 2;
+            ctx.stroke();
+
+            // Rank pips
+            for (let i = 0; i < data.maxRank; i++) {
+                const px = pos.x - (data.maxRank - 1) * 5 + i * 10;
+                ctx.fillStyle = i < rank ? '#ffd700' : '#333';
+                ctx.beginPath();
+                ctx.arc(px, pos.y + 28, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Name
+            ctx.fillStyle = maxed ? '#ffd700' : rank > 0 ? '#fff' : available ? '#ffaa00' : '#666';
+            ctx.font = '11px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(data.name, pos.x, pos.y + 42);
+
+            // Abbreviated icon letter
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 14px Arial';
+            ctx.fillText(data.name[0], pos.x, pos.y + 5);
+        }
+
+        // Tooltip on hover
+        for (const [id, pos] of Object.entries(this.nodePositions)) {
+            if (Math.hypot(mouseX - pos.x, mouseY - pos.y) < 24) {
+                const data = SKILL_DATA[id];
+                const ttx = Math.min(pos.x + 30, W - 200), tty = pos.y - 20;
+                ctx.fillStyle = 'rgba(0,0,0,0.9)';
+                ctx.fillRect(ttx, tty, 190, 70);
+                ctx.strokeStyle = BRANCH_COLORS[data.branch];
+                ctx.strokeRect(ttx, tty, 190, 70);
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 13px Arial';
+                ctx.textAlign = 'left';
+                ctx.fillText(data.name, ttx + 8, tty + 18);
+                ctx.fillStyle = '#aaa';
+                ctx.font = '11px Arial';
+                ctx.fillText(data.desc, ttx + 8, tty + 36);
+                ctx.fillStyle = '#ffd700';
+                ctx.fillText(`Rank: ${this.ranks[id]}/${data.maxRank}`, ttx + 8, tty + 54);
+            }
+        }
+    }
+}
+
+let skillTree = new SkillTree();
+
+// ========== SKIN SYSTEM ==========
+let showSkinMenu = false;
+function toggleSkinMenu() { showSkinMenu = !showSkinMenu; showSkillTree = false; }
+
+const SKINS = [
+    {
+        id: 'classic', name: 'Classic Knight', desc: 'Standard blue armor.',
+        body: '#4488ff', sword: '#ccc', hilt: '#aa8833', visor: '#223', shield: '#4488cc',
+        glow: null, trail: null, unlocked: true, condition: 'Default'
+    },
+    {
+        id: 'dark', name: 'Dark Knight', desc: 'Black armor, red glow.',
+        body: '#332244', sword: '#ff4444', hilt: '#440000', visor: '#ff0000', shield: '#442244',
+        glow: '#ff0000', trail: '#661122',
+        unlocked: false, condition: 'Kill 50 slimes total'
+    },
+    {
+        id: 'golden', name: 'Golden Knight', desc: 'Gold armor, sparkle effects.',
+        body: '#ddaa00', sword: '#ffeedd', hilt: '#bb8800', visor: '#ffe066', shield: '#ccaa00',
+        glow: '#ffd700', trail: '#ffd700',
+        unlocked: false, condition: 'Reach wave 10'
+    },
+    {
+        id: 'ice', name: 'Ice Knight', desc: 'Frozen armor, frost trail.',
+        body: '#88ccee', sword: '#aaeeff', hilt: '#446688', visor: '#ccffff', shield: '#66aacc',
+        glow: '#44ccff', trail: '#88ddff',
+        unlocked: false, condition: 'Block 20 attacks'
+    },
+    {
+        id: 'fire', name: 'Fire Knight', desc: 'Burning armor, flame effects.',
+        body: '#cc4400', sword: '#ff8844', hilt: '#662200', visor: '#ff6600', shield: '#aa3300',
+        glow: '#ff4400', trail: '#ff6600',
+        unlocked: false, condition: 'Get a 10x combo'
+    },
+    {
+        id: 'shadow', name: 'Shadow Knight', desc: 'Translucent dark form.',
+        body: 'rgba(40,20,60,0.6)', sword: '#9944ff', hilt: '#440066', visor: '#bb66ff', shield: 'rgba(60,30,90,0.6)',
+        glow: '#9944ff', trail: '#6622aa',
+        unlocked: false, condition: 'Complete a wave without damage'
+    },
+    {
+        id: 'crystal', name: 'Crystal Knight', desc: 'Rainbow prismatic shifts.',
+        body: null, sword: null, hilt: '#888', visor: null, shield: null,
+        glow: null, trail: null, rainbow: true,
+        unlocked: false, condition: 'Reach wave 20'
+    },
+    {
+        id: 'bone', name: 'Bone Knight', desc: 'Skeletal undead warrior.',
+        body: '#ddccbb', sword: '#bbaa99', hilt: '#665544', visor: '#44ff44', shield: '#ccbbaa',
+        glow: '#44ff44', trail: '#44ff44',
+        unlocked: false, condition: 'Revive with Second Wind'
+    }
+];
+
+class SkinManager {
+    constructor() {
+        this.activeSkin = SKINS[0];
+        this.totalBlocks = 0;
+        this.flawlessWaves = 0;
+        this.usedSecondWind = false;
+    }
+
+    select(skinId) {
+        const skin = SKINS.find(s => s.id === skinId);
+        if (skin && skin.unlocked) this.activeSkin = skin;
+    }
+
+    checkUnlocks() {
+        SKINS.find(s => s.id === 'dark').unlocked = game.kills >= 50;
+        SKINS.find(s => s.id === 'golden').unlocked = game.wave >= 10;
+        SKINS.find(s => s.id === 'ice').unlocked = this.totalBlocks >= 20;
+        SKINS.find(s => s.id === 'fire').unlocked = (knight?.combo || 0) >= 10 || SKINS.find(s => s.id === 'fire').unlocked;
+        SKINS.find(s => s.id === 'shadow').unlocked = this.flawlessWaves > 0;
+        SKINS.find(s => s.id === 'crystal').unlocked = game.wave >= 20;
+        SKINS.find(s => s.id === 'bone').unlocked = this.usedSecondWind;
+    }
+
+    handleClick(mx, my) {
+        // Must match draw() layout exactly
+        const startX = W / 2 - 215, cardW = 95, cardH = 130, gap = 10;
+        for (let i = 0; i < SKINS.length; i++) {
+            const col = i % 4, row = Math.floor(i / 4);
+            const cx = startX + col * (cardW + gap) + cardW / 2;
+            const cy = 100 + row * (cardH + gap + 20) + 60;
+            if (mx > cx - cardW / 2 && mx < cx + cardW / 2 && my > cy - 50 && my < cy + cardH - 50) {
+                if (SKINS[i].unlocked) {
+                    this.select(SKINS[i].id);
+                    SFX.pickup();
+                }
+                return;
+            }
+        }
+    }
+
+    getColor(prop, time) {
+        const skin = this.activeSkin;
+        if (skin.rainbow) {
+            const hue = ((time || Date.now()) * 0.1) % 360;
+            return `hsl(${hue + (prop === 'sword' ? 60 : prop === 'visor' ? 120 : prop === 'shield' ? 180 : 0)}, 80%, 60%)`;
+        }
+        return skin[prop];
+    }
+
+    draw(ctx) {
+        ctx.fillStyle = 'rgba(10, 10, 25, 0.95)';
+        ctx.fillRect(0, 0, W, H);
+
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 28px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Knight Skins', W / 2, 40);
+        ctx.fillStyle = '#666';
+        ctx.font = '12px Arial';
+        ctx.fillText('Click to select | C or Esc to close', W / 2, 60);
+
+        const startX = W / 2 - 215, cardW = 95, cardH = 130, gap = 10;
+
+        for (let i = 0; i < SKINS.length; i++) {
+            const skin = SKINS[i];
+            const col = i % 4, row = Math.floor(i / 4);
+            const cx = startX + col * (cardW + gap) + cardW / 2;
+            const cy = 100 + row * (cardH + gap + 20) + 60;
+
+            // Card background
+            ctx.fillStyle = skin.unlocked ? 'rgba(30,30,60,0.8)' : 'rgba(20,20,30,0.6)';
+            ctx.fillRect(cx - cardW / 2, cy - 50, cardW, cardH);
+
+            // Selection border
+            if (this.activeSkin.id === skin.id) {
+                ctx.strokeStyle = '#ffd700';
+                ctx.lineWidth = 3;
+            } else {
+                ctx.strokeStyle = skin.unlocked ? '#555' : '#333';
+                ctx.lineWidth = 1;
+            }
+            ctx.strokeRect(cx - cardW / 2, cy - 50, cardW, cardH);
+
+            if (skin.unlocked) {
+                // Draw mini knight preview
+                ctx.save();
+                ctx.translate(cx, cy - 10);
+                const bc = skin.rainbow ? `hsl(${(Date.now() * 0.1) % 360}, 80%, 60%)` : skin.body;
+                ctx.fillStyle = bc;
+                ctx.beginPath();
+                ctx.arc(0, 0, 12, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                // Visor
+                const vc = skin.rainbow ? `hsl(${((Date.now() * 0.1) + 120) % 360}, 80%, 60%)` : skin.visor;
+                ctx.fillStyle = vc;
+                ctx.beginPath();
+                ctx.arc(6, 0, 4, 0, Math.PI * 2);
+                ctx.fill();
+                if (skin.glow) {
+                    ctx.shadowColor = skin.glow;
+                    ctx.shadowBlur = 8;
+                    ctx.strokeStyle = skin.glow;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 14, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+                ctx.restore();
+
+                // Name
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 11px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(skin.name, cx, cy + 32);
+            } else {
+                // Lock icon
+                ctx.fillStyle = '#444';
+                ctx.font = '24px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('🔒', cx, cy);
+                ctx.fillStyle = '#666';
+                ctx.font = '9px Arial';
+                ctx.fillText(skin.condition, cx, cy + 32);
+                ctx.fillStyle = '#888';
+                ctx.font = '10px Arial';
+                ctx.fillText(skin.name, cx, cy + 46);
+            }
+        }
+    }
+}
+
+let skinManager = new SkinManager();
+
 // ========== KNIGHT (PLAYER) ==========
 const KNIGHT_STATES = {
     IDLE: {
@@ -344,6 +1270,7 @@ const KNIGHT_STATES = {
             const moving = keys['w'] || keys['a'] || keys['s'] || keys['d'] ||
                            keys['arrowup'] || keys['arrowleft'] || keys['arrowdown'] || keys['arrowright'];
             if (k.hp <= 0) return fsm.transition('DEAD');
+            if (keys[' '] && skillTree.hasSkill('dodgeRoll') && k.dodgeCooldown <= 0) return fsm.transition('DODGING');
             if (mouseDown) return fsm.transition('ATTACKING');
             if (rightDown || keys['shift']) return fsm.transition('BLOCKING');
             if (moving) return fsm.transition('RUNNING');
@@ -353,6 +1280,7 @@ const KNIGHT_STATES = {
         enter(k) { k.frame = 0; },
         update(k, dt, fsm) {
             if (k.hp <= 0) return fsm.transition('DEAD');
+            if (keys[' '] && skillTree.hasSkill('dodgeRoll') && k.dodgeCooldown <= 0) return fsm.transition('DODGING');
             if (mouseDown) return fsm.transition('ATTACKING');
             if (rightDown || keys['shift']) return fsm.transition('BLOCKING');
 
@@ -365,8 +1293,9 @@ const KNIGHT_STATES = {
             if (dx === 0 && dy === 0) return fsm.transition('IDLE');
 
             const len = Math.hypot(dx, dy) || 1;
-            k.x += (dx / len) * k.speed * dt;
-            k.y += (dy / len) * k.speed * dt;
+            const spd = k.speed * skillTree.getSpeedMultiplier(k);
+            k.x += (dx / len) * spd * dt;
+            k.y += (dy / len) * spd * dt;
             k.x = clamp(k.x, 20, W - 20);
             k.y = clamp(k.y, 20, H - 20);
             k.facing = Math.atan2(dy, dx);
@@ -378,39 +1307,95 @@ const KNIGHT_STATES = {
             k.facing = k.attackAngle;
             k.hasHit = {};
             SFX.slash();
+            // Slash trail particles
+            spawnSlashTrail(k.x, k.y, k.attackAngle, k.weapon.range, RARITY_COLORS[k.weapon.rarity]);
         },
         update(k, dt, fsm) {
             if (k.hp <= 0) return fsm.transition('DEAD');
-            // Check hits on slimes during attack window
+            const weapon = k.weapon;
+            const arc = skillTree.getAttackArc() || weapon.arc;
+
             if (fsm.timer > 0.05 && fsm.timer < 0.25) {
                 slimes.forEach(s => {
                     if (s.hp <= 0 || k.hasHit[s.id]) return;
                     const d = dist(k, s);
-                    if (d < k.attackRange) {
+                    if (d < weapon.range) {
                         const angToSlime = angleTo(k, s);
                         let angleDiff = angToSlime - k.attackAngle;
                         while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
                         while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-                        if (Math.abs(angleDiff) < Math.PI / 3) {
-                            k.hasHit[s.id] = true;
-                            const dmg = k.damage;
+                        if (Math.abs(angleDiff) < arc / 2) {
+                            if (!weapon.piercing) k.hasHit[s.id] = true;
+                            let dmg = weapon.getDamage ? weapon.getDamage(k) : weapon.damage;
+                            dmg = Math.floor(dmg * skillTree.getDamageMultiplier(k));
+
+                            // Crit check
+                            const critChance = skillTree.getCritChance();
+                            let isCrit = Math.random() < critChance;
+                            if (isCrit) dmg *= 2;
+
+                            // Execute check
+                            if (skillTree.hasSkill('execute') && s.hp < s.maxHp * 0.2) dmg *= 3;
+
                             s.takeDamage(dmg, k);
                             SFX.hit();
-                            spawnParticles(s.x, s.y, '#44ff44', 6);
-                            spawnText(s.x, s.y - 20, `-${dmg}`, '#ff4444');
+                            // Juicy hit feedback
+                            spawnBurstParticles(s.x, s.y, isCrit ? '#ffaa00' : '#44ff44', isCrit ? 12 : 6, isCrit ? 5 : 3);
+                            triggerScreenShake(isCrit ? 5 : 2);
+                            triggerHitFreeze(isCrit ? 0.04 : 0.02);
+                            if (isCrit) screenFlash = { color: '#ffaa00', timer: 0.1 };
+                            spawnText(s.x, s.y - 20, isCrit ? `CRIT -${dmg}!` : `-${dmg}`, isCrit ? '#ffaa00' : '#ff4444');
 
-                            // Combo system
+                            // Weapon on-hit
+                            if (weapon.onHit) weapon.onHit(s, k);
+
+                            // Life steal
+                            const ls = skillTree.getLifeStealPct();
+                            if (ls > 0) {
+                                const heal = Math.floor(dmg * ls);
+                                if (heal > 0) { k.hp = Math.min(k.maxHp, k.hp + heal); }
+                            }
+
+                            // Fortify consume
+                            if (k.fortifyReady) { k.fortifyReady = false; spawnText(k.x, k.y - 50, 'FORTIFY!', '#ffd700'); }
+
+                            // Combo with escalating feedback
                             k.combo++;
-                            k.comboTimer = 2;
-                            if (k.combo > 1 && k.combo % 3 === 0) {
+                            k.comboTimer = 2 + skillTree.getComboTimerBonus();
+                            if (k.combo >= 3) {
                                 SFX.combo();
-                                spawnText(k.x, k.y - 40, `${k.combo}x COMBO!`, '#ffaa00');
+                                const comboColor = k.combo >= 20 ? '#ff0044' : k.combo >= 10 ? '#ff4400' : k.combo >= 5 ? '#ff6600' : '#ffaa00';
+                                spawnText(k.x, k.y - 40 - Math.min(k.combo * 2, 30), `${k.combo}x COMBO!`, comboColor);
+                                // Escalating pitch on high combos
+                                if (k.combo >= 5) playTone(800 + k.combo * 20, 0.08, 'triangle', 0.08);
+                                if (k.combo >= 10) triggerScreenShake(2);
+                                if (k.combo === 10 || k.combo === 20 || k.combo === 50) {
+                                    screenFlash = { color: comboColor, timer: 0.2 };
+                                    triggerSlowMo(0.2, 0.3);
+                                    spawnBurstParticles(k.x, k.y, comboColor, 15, 6);
+                                }
                             }
                         }
                     }
                 });
+
+                // Boss hit
+                if (waveManager.boss && waveManager.boss.alive) {
+                    const bDist = dist(k, waveManager.boss);
+                    if (bDist < weapon.range + waveManager.boss.size) {
+                        if (!k.hasHit['boss']) {
+                            k.hasHit['boss'] = true;
+                            let dmg = weapon.getDamage ? weapon.getDamage(k) : weapon.damage;
+                            dmg = Math.floor(dmg * skillTree.getDamageMultiplier(k));
+                            waveManager.damageBoss(dmg);
+                            SFX.hit();
+                            k.combo++;
+                            k.comboTimer = 2 + skillTree.getComboTimerBonus();
+                        }
+                    }
+                }
             }
-            if (fsm.timer > 0.3) fsm.transition('IDLE');
+            if (fsm.timer > weapon.cooldown) fsm.transition('IDLE');
         }
     },
     BLOCKING: {
@@ -421,7 +1406,6 @@ const KNIGHT_STATES = {
         update(k, dt, fsm) {
             if (k.hp <= 0) return fsm.transition('DEAD');
             if (!rightDown && !keys['shift']) return fsm.transition('IDLE');
-            // Slow movement while blocking
             let dx = 0, dy = 0;
             if (keys['a'] || keys['arrowleft']) dx -= 1;
             if (keys['d'] || keys['arrowright']) dx += 1;
@@ -429,14 +1413,43 @@ const KNIGHT_STATES = {
             if (keys['s'] || keys['arrowdown']) dy += 1;
             if (dx || dy) {
                 const len = Math.hypot(dx, dy);
-                k.x += (dx / len) * k.speed * 0.4 * dt;
-                k.y += (dy / len) * k.speed * 0.4 * dt;
+                const spd = k.speed * skillTree.getSpeedMultiplier(k);
+                k.x += (dx / len) * spd * 0.4 * dt;
+                k.y += (dy / len) * spd * 0.4 * dt;
                 k.x = clamp(k.x, 20, W - 20);
                 k.y = clamp(k.y, 20, H - 20);
             }
             k.facing = angleTo(k, { x: mouseX, y: mouseY });
         },
         exit(k) { k.blocking = false; }
+    },
+    DODGING: {
+        enter(k) {
+            k.dodgeCooldown = 2;
+            k.invincible = 0.5;
+            k.shadowStrikeTimer = skillTree.hasSkill('shadowStrike') ? 1 : 0;
+            SFX.dodge();
+            // Determine dodge direction
+            let dx = 0, dy = 0;
+            if (keys['a'] || keys['arrowleft']) dx -= 1;
+            if (keys['d'] || keys['arrowright']) dx += 1;
+            if (keys['w'] || keys['arrowup']) dy -= 1;
+            if (keys['s'] || keys['arrowdown']) dy += 1;
+            if (dx === 0 && dy === 0) { dx = Math.cos(k.facing); dy = Math.sin(k.facing); }
+            const len = Math.hypot(dx, dy) || 1;
+            k.dodgeVx = (dx / len) * 500;
+            k.dodgeVy = (dy / len) * 500;
+            spawnParticles(k.x, k.y, '#aaaaff', 6, 2);
+        },
+        update(k, dt, fsm) {
+            k.x += k.dodgeVx * dt;
+            k.y += k.dodgeVy * dt;
+            k.x = clamp(k.x, 20, W - 20);
+            k.y = clamp(k.y, 20, H - 20);
+            k.dodgeVx *= 0.9;
+            k.dodgeVy *= 0.9;
+            if (fsm.timer > 0.3) fsm.transition('IDLE');
+        }
     },
     HURT: {
         enter(k) {
@@ -451,6 +1464,18 @@ const KNIGHT_STATES = {
     },
     DEAD: {
         enter(k) {
+            // Second Wind check
+            if (skillTree.hasSkill('secondWind') && !k.usedSecondWind) {
+                k.usedSecondWind = true;
+                k.hp = Math.floor(k.maxHp * 0.3);
+                k.invincible = 1.5;
+                spawnText(k.x, k.y - 30, 'SECOND WIND!', '#44ff88');
+                spawnParticles(k.x, k.y, '#44ff88', 20, 5);
+                skinManager.usedSecondWind = true;
+                SFX.levelUp();
+                k.fsm.transition('IDLE');
+                return;
+            }
             SFX.death();
             spawnParticles(k.x, k.y, '#ff0000', 30, 5);
             setTimeout(showGameOver, 1500);
@@ -470,20 +1495,73 @@ function createKnight() {
         facing: 0, blocking: false,
         invincible: 0, combo: 0, comboTimer: 0,
         hasHit: {},
+        weapon: WEAPONS[0], // Iron Sword
+        xp: 0, skillPoints: 0, level: 1,
+        dodgeCooldown: 0, dodgeVx: 0, dodgeVy: 0,
+        shadowStrikeTimer: 0, speedBoostTimer: 0,
+        fortifyReady: false, fortifyCounter: 0,
+        regenTimer: 0, usedSecondWind: false,
+        blocksThisWave: 0,
+        statusEffects: [],
         fsm: null,
 
         takeDamage(dmg) {
             if (this.invincible > 0) return;
             if (this.blocking) {
-                dmg = Math.floor(dmg * 0.2);
+                const reduction = skillTree.getBlockReduction();
+                dmg = Math.floor(dmg * (1 - reduction));
                 SFX.block();
                 spawnText(this.x, this.y - 30, 'BLOCKED!', '#44aaff');
                 spawnParticles(this.x + Math.cos(this.facing) * 20, this.y + Math.sin(this.facing) * 20, '#44aaff', 5);
+                skinManager.totalBlocks++;
+                this.blocksThisWave++;
+
+                // Thorns
+                const thornsPct = skillTree.getThornsPct();
+                if (thornsPct > 0) {
+                    // Find nearest slime and reflect
+                    const nearby = slimes.filter(s => s.hp > 0 && dist(this, s) < 80);
+                    nearby.forEach(s => {
+                        const reflected = Math.floor(dmg * thornsPct / (1 - reduction));
+                        s.hp -= reflected;
+                        spawnText(s.x, s.y - 15, `-${reflected}`, '#4488ff');
+                        if (s.hp <= 0) { s.hp = 0; s.fsm.transition('DEAD'); }
+                    });
+                }
+
+                // Fortify counter
+                if (skillTree.hasSkill('fortify')) {
+                    this.fortifyCounter++;
+                    if (this.fortifyCounter >= 3) {
+                        this.fortifyReady = true;
+                        this.fortifyCounter = 0;
+                        spawnText(this.x, this.y - 50, 'FORTIFIED!', '#ffd700');
+                    }
+                }
             }
             this.hp -= dmg;
             if (this.hp < 0) this.hp = 0;
             spawnText(this.x, this.y - 20, `-${dmg}`, '#ff4444');
-            if (this.fsm.current !== 'DEAD') this.fsm.transition('HURT');
+            if (this.fsm.current !== 'DEAD' && this.fsm.current !== 'DODGING') this.fsm.transition('HURT');
+        },
+
+        gainXP(amount) {
+            this.xp += amount;
+            const needed = this.level * 100 + 50;
+            while (this.xp >= needed) {
+                this.xp -= needed;
+                this.level++;
+                this.skillPoints++;
+                SFX.levelUp();
+                spawnText(this.x, this.y - 50, `LEVEL ${this.level}!`, '#ffd700');
+                spawnText(this.x, this.y - 65, '+1 Skill Point', '#ffd700');
+                // Big level up celebration
+                screenFlash = { color: '#ffd700', timer: 0.35 };
+                triggerScreenShake(6);
+                triggerSlowMo(0.3, 0.3);
+                spawnBurstParticles(this.x, this.y, '#ffd700', 25, 6, 5);
+                spawnBurstParticles(this.x, this.y, '#ffffff', 15, 4, 3);
+            }
         }
     };
 }
@@ -492,8 +1570,25 @@ function drawKnight(k) {
     const flash = k.invincible > 0 && Math.floor(k.invincible * 15) % 2;
     if (flash) return;
 
+    const skin = skinManager.activeSkin;
+    const time = Date.now();
+
     ctx.save();
     ctx.translate(k.x, k.y);
+
+    // Trail effect
+    if (skin.trail && (k.fsm.current === 'RUNNING' || k.fsm.current === 'DODGING')) {
+        for (let i = 0; i < 2; i++) {
+            ctx.fillStyle = skin.trail;
+            ctx.globalAlpha = 0.3;
+            ctx.beginPath();
+            ctx.arc(-Math.cos(k.facing) * (5 + i * 8) + (Math.random() - 0.5) * 6,
+                    -Math.sin(k.facing) * (5 + i * 8) + (Math.random() - 0.5) * 6,
+                    3 + Math.random() * 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+    }
 
     // Shadow
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
@@ -501,19 +1596,27 @@ function drawKnight(k) {
     ctx.ellipse(0, 14, 16, 6, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Body
     const state = k.fsm.current;
-    let bodyColor = '#4488ff';
-    if (state === 'ATTACKING') bodyColor = '#ff6644';
-    else if (state === 'BLOCKING') bodyColor = '#44aaff';
+
+    // Body color
+    let bodyColor = skinManager.getColor('body', time);
+    if (state === 'ATTACKING') bodyColor = skin.rainbow ? skinManager.getColor('body', time) : (skin.id === 'classic' ? '#ff6644' : bodyColor);
+    else if (state === 'BLOCKING') bodyColor = skin.rainbow ? skinManager.getColor('body', time) : (skin.id === 'classic' ? '#44aaff' : bodyColor);
     else if (state === 'HURT') bodyColor = '#ff4444';
     else if (state === 'DEAD') bodyColor = '#444';
+    else if (state === 'DODGING') bodyColor = 'rgba(150,150,255,0.5)';
+
+    // Skin glow
+    if (skin.glow) {
+        ctx.shadowColor = skin.glow;
+        ctx.shadowBlur = 10 + Math.sin(time * 0.005) * 4;
+    }
 
     // Shield when blocking
     if (k.blocking) {
         ctx.save();
         ctx.rotate(k.facing);
-        ctx.fillStyle = '#4488cc';
+        ctx.fillStyle = skinManager.getColor('shield', time);
         ctx.strokeStyle = '#aaddff';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -523,26 +1626,14 @@ function drawKnight(k) {
         ctx.restore();
     }
 
-    // Sword
+    // Weapon drawing
     ctx.save();
     ctx.rotate(k.facing);
     if (state === 'ATTACKING') {
-        const swingAngle = Math.sin(k.fsm.timer * Math.PI / 0.3) * 1.2;
+        const swingAngle = Math.sin(k.fsm.timer * Math.PI / k.weapon.cooldown) * 1.2;
         ctx.rotate(swingAngle - 0.6);
     }
-    ctx.strokeStyle = '#ccc';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(14, 0);
-    ctx.lineTo(38, 0);
-    ctx.stroke();
-    // Hilt
-    ctx.strokeStyle = '#aa8833';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(14, -5);
-    ctx.lineTo(14, 5);
-    ctx.stroke();
+    k.weapon.drawBlade(ctx, state === 'ATTACKING' ? k.fsm.timer / k.weapon.cooldown : 0);
     ctx.restore();
 
     // Body circle
@@ -553,11 +1644,12 @@ function drawKnight(k) {
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 2;
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
     // Helmet visor
     ctx.save();
     ctx.rotate(k.facing);
-    ctx.fillStyle = '#223';
+    ctx.fillStyle = skinManager.getColor('visor', time);
     ctx.beginPath();
     ctx.arc(8, 0, 5, 0, Math.PI * 2);
     ctx.fill();
@@ -573,6 +1665,24 @@ function drawKnight(k) {
         ctx.fillStyle = '#f44';
         ctx.fillRect(k.x - bw / 2, k.y - 28, bw * (k.hp / k.maxHp), bh);
     }
+
+    // XP bar (small, under HP bar)
+    if (k.hp > 0) {
+        const bw = 40, bh = 2;
+        const needed = k.level * 100 + 50;
+        ctx.fillStyle = '#003';
+        ctx.fillRect(k.x - bw / 2, k.y - 23, bw, bh);
+        ctx.fillStyle = '#44aaff';
+        ctx.fillRect(k.x - bw / 2, k.y - 23, bw * (k.xp / needed), bh);
+    }
+
+    // Dodge cooldown indicator
+    if (skillTree.hasSkill('dodgeRoll') && k.dodgeCooldown > 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.font = '10px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Dodge: ${k.dodgeCooldown.toFixed(1)}s`, k.x, k.y + 30);
+    }
 }
 
 // ========== SLIME (ENEMY) ==========
@@ -587,10 +1697,10 @@ const SLIME_STATES = {
             };
         },
         update(s, dt, fsm) {
-            // Move toward patrol point
+            const spdMult = getSpeedMultiplier(s);
             const ang = angleTo(s, s.patrolTarget);
-            s.x += Math.cos(ang) * s.speed * 0.5 * dt;
-            s.y += Math.sin(ang) * s.speed * 0.5 * dt;
+            s.x += Math.cos(ang) * s.speed * 0.5 * spdMult * dt;
+            s.y += Math.sin(ang) * s.speed * 0.5 * spdMult * dt;
 
             if (dist(s, s.patrolTarget) < 10) {
                 s.patrolTarget = {
@@ -599,7 +1709,6 @@ const SLIME_STATES = {
                 };
             }
 
-            // Detect player
             if (knight && knight.hp > 0 && dist(s, knight) < s.detectRange) {
                 fsm.transition('CHASE');
             }
@@ -608,27 +1717,26 @@ const SLIME_STATES = {
     CHASE: {
         update(s, dt, fsm) {
             if (!knight || knight.hp <= 0) return fsm.transition('PATROL');
+            if (hasStatus(s, STATUS.STUN)) return;
 
             const d = dist(s, knight);
             if (d > s.detectRange * 1.5) return fsm.transition('PATROL');
             if (d < s.attackDist) return fsm.transition('ATTACK');
-
-            // Flee if low HP
             if (s.hp <= s.maxHp * 0.25) return fsm.transition('FLEE');
 
+            const spdMult = getSpeedMultiplier(s);
             const ang = angleTo(s, knight);
-            s.x += Math.cos(ang) * s.speed * dt;
-            s.y += Math.sin(ang) * s.speed * dt;
+            s.x += Math.cos(ang) * s.speed * spdMult * dt;
+            s.y += Math.sin(ang) * s.speed * spdMult * dt;
             s.x = clamp(s.x, 10, W - 10);
             s.y = clamp(s.y, 10, H - 10);
         }
     },
     ATTACK: {
-        enter(s) {
-            s.attacked = false;
-        },
+        enter(s) { s.attacked = false; },
         update(s, dt, fsm) {
             if (!knight || knight.hp <= 0) return fsm.transition('PATROL');
+            if (hasStatus(s, STATUS.STUN)) return fsm.transition('STUNNED');
             if (!s.attacked && fsm.timer > 0.3) {
                 s.attacked = true;
                 if (dist(s, knight) < s.attackDist + 10) {
@@ -645,11 +1753,10 @@ const SLIME_STATES = {
         }
     },
     STUNNED: {
-        enter(s) {
-            spawnParticles(s.x, s.y, '#cc44ff', 5);
-        },
+        enter(s) { spawnParticles(s.x, s.y, '#cc44ff', 5); },
         update(s, dt, fsm) {
-            if (fsm.timer > 0.8) {
+            const stunDuration = hasStatus(s, STATUS.STUN) ? 1.5 : 0.8;
+            if (fsm.timer > stunDuration) {
                 if (s.hp <= s.maxHp * 0.25) fsm.transition('FLEE');
                 else fsm.transition('CHASE');
             }
@@ -658,29 +1765,46 @@ const SLIME_STATES = {
     FLEE: {
         update(s, dt, fsm) {
             if (!knight || knight.hp <= 0) return fsm.transition('PATROL');
-
-            const ang = angleTo(knight, s); // Run away
-            s.x += Math.cos(ang) * s.speed * 1.3 * dt;
-            s.y += Math.sin(ang) * s.speed * 1.3 * dt;
+            const spdMult = getSpeedMultiplier(s);
+            const ang = angleTo(knight, s);
+            s.x += Math.cos(ang) * s.speed * 1.3 * spdMult * dt;
+            s.y += Math.sin(ang) * s.speed * 1.3 * spdMult * dt;
             s.x = clamp(s.x, 10, W - 10);
             s.y = clamp(s.y, 10, H - 10);
-
             if (dist(s, knight) > s.detectRange * 2) fsm.transition('PATROL');
         }
     },
     DEAD: {
         enter(s) {
             SFX.kill();
-            spawnParticles(s.x, s.y, s.color, 15, 4);
+            // Juicy death: bigger burst, screen shake, kill streak
+            spawnBurstParticles(s.x, s.y, s.color, s.isElite ? 20 : 12, s.isElite ? 6 : 4, s.isElite ? 6 : 4);
+            spawnBurstParticles(s.x, s.y, '#ffffff', 4, 3, 2); // white sparks
+            triggerScreenShake(s.isElite ? 6 : 3);
+            triggerHitFreeze(s.isElite ? 0.05 : 0.025);
+            screenFlash = { color: s.color, timer: 0.15 };
+
             spawnText(s.x, s.y - 20, '+' + s.score, '#44ff44');
             game.kills++;
+            addKillStreak();
 
-            // Chance to drop a heal
+            // Weapon on-kill
+            if (knight && knight.weapon.onKill) knight.weapon.onKill(s, knight);
+
+            // XP with juicy text
+            const xp = 5 + s.tier * 3 + (s.isElite ? 15 : 0);
+            if (knight) knight.gainXP(xp);
+            spawnText(s.x, s.y - 35, `+${xp} XP`, '#44aaff');
+
+            // Health drop
             if (Math.random() < 0.3 && knight && knight.hp < knight.maxHp) {
                 const heal = Math.min(10, knight.maxHp - knight.hp);
                 knight.hp += heal;
-                spawnText(s.x, s.y - 35, `+${heal} HP`, '#44ff88');
+                spawnText(s.x, s.y - 50, `+${heal} HP`, '#44ff88');
             }
+
+            // Weapon drop roll
+            rollWeaponDrop(s.x, s.y, false, s.isElite);
         },
         update() {}
     }
@@ -691,7 +1815,7 @@ function createSlime(x, y, tier = 1) {
     const s = {
         id: slimeIdCounter++,
         name: 'Slime',
-        x, y,
+        x, y, alive: true,
         speed: 60 + tier * 15 + Math.random() * 20,
         hp: 30 + tier * 20,
         maxHp: 30 + tier * 20,
@@ -700,16 +1824,19 @@ function createSlime(x, y, tier = 1) {
         attackDist: 30,
         radius: 12 + tier * 2,
         color: colors[tier % colors.length],
-        tier,
+        tier: Math.max(1, tier),
         score: tier * 10,
+        isElite: false,
         patrolTarget: { x, y },
         attacked: false,
+        statusEffects: [],
         fsm: null,
 
         takeDamage(dmg, attacker) {
             this.hp -= dmg;
             if (this.hp <= 0) {
                 this.hp = 0;
+                this.alive = false;
                 this.fsm.transition('DEAD');
             } else {
                 this.fsm.transition('STUNNED');
@@ -717,6 +1844,20 @@ function createSlime(x, y, tier = 1) {
         }
     };
     s.fsm = new FSM(s, SLIME_STATES, 'PATROL');
+    slimes.push(s);
+    return s;
+}
+
+function createEliteSlime(x, y, tier) {
+    const s = createSlime(x, y, tier);
+    s.isElite = true;
+    s.hp *= 2.5;
+    s.maxHp = s.hp;
+    s.damage *= 1.5;
+    s.speed *= 1.2;
+    s.radius += 4;
+    s.score *= 3;
+    s.name = 'Elite Slime';
     return s;
 }
 
@@ -726,7 +1867,6 @@ function drawSlime(s) {
     ctx.save();
     ctx.translate(s.x, s.y);
 
-    // Death shrink
     if (s.fsm.current === 'DEAD') {
         const scale = 1 - (s.fsm.timer / 0.3);
         ctx.scale(scale, scale);
@@ -742,11 +1882,37 @@ function drawSlime(s) {
     const bounce = Math.sin(Date.now() * 0.005 + s.id) * 2;
     const squish = s.fsm.current === 'ATTACK' ? 0.8 : 1;
 
+    // Status tint
+    if (hasStatus(s, STATUS.BURN)) {
+        ctx.shadowColor = '#ff4400'; ctx.shadowBlur = 6;
+    } else if (hasStatus(s, STATUS.POISON)) {
+        ctx.shadowColor = '#44ff44'; ctx.shadowBlur = 6;
+    } else if (hasStatus(s, STATUS.SLOW)) {
+        ctx.shadowColor = '#4488ff'; ctx.shadowBlur = 6;
+    }
+
+    // Elite glow
+    if (s.isElite) {
+        ctx.shadowColor = s.color;
+        ctx.shadowBlur = 10;
+    }
+
     // Body
-    ctx.fillStyle = s.color;
+    ctx.fillStyle = hasStatus(s, STATUS.SLOW) ? '#8888cc' : s.color;
     ctx.beginPath();
     ctx.ellipse(0, bounce - 2, s.radius * squish, s.radius * (2 - squish) * 0.8, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Elite crown
+    if (s.isElite) {
+        ctx.fillStyle = '#ffd700';
+        const crownY = bounce - s.radius * 0.8 - 6;
+        ctx.beginPath();
+        ctx.moveTo(-8, crownY + 6); ctx.lineTo(-6, crownY); ctx.lineTo(-2, crownY + 4);
+        ctx.lineTo(0, crownY - 2); ctx.lineTo(2, crownY + 4); ctx.lineTo(6, crownY);
+        ctx.lineTo(8, crownY + 6); ctx.closePath(); ctx.fill();
+    }
 
     // Highlight
     ctx.fillStyle = 'rgba(255,255,255,0.3)';
@@ -771,29 +1937,27 @@ function drawSlime(s) {
     ctx.arc(4 + (knight ? Math.sign(knight.x - s.x) * eyeOff : 0), bounce - 4, 2, 0, Math.PI * 2);
     ctx.fill();
 
-    // State indicator (small icon above)
+    // State indicator
     if (s.fsm.current === 'STUNNED') {
-        ctx.fillStyle = '#cc44ff';
-        ctx.font = '12px Arial';
-        ctx.textAlign = 'center';
+        ctx.fillStyle = '#cc44ff'; ctx.font = '12px Arial'; ctx.textAlign = 'center';
         ctx.fillText('*', 0, bounce - s.radius - 6);
     } else if (s.fsm.current === 'CHASE') {
-        ctx.fillStyle = '#ff0';
-        ctx.font = '10px Arial';
-        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ff0'; ctx.font = '10px Arial'; ctx.textAlign = 'center';
         ctx.fillText('!', 0, bounce - s.radius - 6);
     } else if (s.fsm.current === 'FLEE') {
-        ctx.fillStyle = '#88f';
-        ctx.font = '10px Arial';
-        ctx.textAlign = 'center';
+        ctx.fillStyle = '#88f'; ctx.font = '10px Arial'; ctx.textAlign = 'center';
         ctx.fillText('?', 0, bounce - s.radius - 6);
     }
+
+    // Status effect icons
+    if (hasStatus(s, STATUS.BURN)) { ctx.fillStyle = '#ff4400'; ctx.font = '10px Arial'; ctx.fillText('🔥', s.radius + 2, bounce - 2); }
+    if (hasStatus(s, STATUS.POISON)) { ctx.fillStyle = '#44ff44'; ctx.font = '10px Arial'; ctx.fillText('☠', s.radius + 2, bounce + 8); }
 
     ctx.restore();
 
     // HP bar
     if (s.hp < s.maxHp && s.hp > 0) {
-        const bw = 24, bh = 3;
+        const bw = s.isElite ? 32 : 24, bh = 3;
         ctx.fillStyle = '#300';
         ctx.fillRect(s.x - bw / 2, s.y - s.radius - 14, bw, bh);
         ctx.fillStyle = '#4c4';
@@ -801,42 +1965,461 @@ function drawSlime(s) {
     }
 }
 
+// ========== BOSS SLIME ==========
+class BossSlime {
+    constructor(waveNum) {
+        this.x = W / 2; this.y = 80;
+        this.size = 40;
+        this.maxHp = 200 + waveNum * 50;
+        this.hp = this.maxHp;
+        this.damage = 15 + Math.floor(waveNum / 10) * 5;
+        this.speed = 1.2;
+        this.alive = true;
+        this.enraged = false;
+        this.state = 'IDLE';
+        this.stateTimer = 0;
+        this.pulseTimer = 0;
+        this.hitFlash = 0;
+        this.shakeX = 0; this.shakeY = 0;
+        this.chargeWindup = 0;
+        this.chargeTargetX = 0; this.chargeTargetY = 0;
+        this.isCharging = false;
+        this.slamActive = false;
+        this.slamTimer = 0;
+        this.slamShockwave = 0;
+        this.attackIndex = 0;
+        this.attackPattern = ['CHARGE', 'SLAM', 'SPAWN'];
+    }
+
+    takeDamage(amount) {
+        this.hp -= amount;
+        this.hitFlash = 0.15;
+        if (this.hp <= this.maxHp * 0.3 && !this.enraged) {
+            this.enraged = true;
+            this.state = 'ENRAGE'; this.stateTimer = 0;
+            this.speed *= 1.5;
+            this.damage = Math.floor(this.damage * 1.4);
+            spawnText(this.x, this.y - this.size, 'ENRAGED!', '#FF4444');
+        }
+        if (this.hp <= 0) {
+            this.hp = 0; this.alive = false;
+            SFX.kill();
+            spawnParticles(this.x, this.y, '#ff0000', 30, 6);
+            spawnText(this.x, this.y - 30, 'BOSS DEFEATED!', '#ffd700');
+            game.kills++;
+            if (knight) knight.gainXP(100);
+            rollWeaponDrop(this.x, this.y, true);
+        }
+    }
+
+    nextAttack() {
+        const pat = this.enraged
+            ? ['CHARGE', 'SLAM', 'CHARGE', 'SPAWN']
+            : this.attackPattern;
+        this.state = pat[this.attackIndex % pat.length];
+        this.attackIndex++;
+        this.stateTimer = 0;
+        this.isCharging = false; this.slamActive = false; this.chargeWindup = 0;
+    }
+
+    update(dt) {
+        if (!this.alive) return;
+        this.pulseTimer += dt * 3;
+        if (this.hitFlash > 0) this.hitFlash -= dt;
+        this.stateTimer += dt;
+
+        const dx = knight.x - this.x, dy = knight.y - this.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+
+        switch (this.state) {
+            case 'IDLE':
+                this.x += (dx / d) * this.speed * 0.5;
+                this.y += (dy / d) * this.speed * 0.5;
+                this.shakeX = 0; this.shakeY = 0;
+                if (this.stateTimer >= (this.enraged ? 1.0 : 2.0)) this.nextAttack();
+                break;
+
+            case 'CHARGE':
+                if (this.chargeWindup < 0.8) {
+                    this.chargeWindup += dt;
+                    this.shakeX = (Math.random() - 0.5) * 6;
+                    this.shakeY = (Math.random() - 0.5) * 6;
+                    if (this.chargeWindup >= 0.8) {
+                        this.chargeTargetX = knight.x; this.chargeTargetY = knight.y;
+                        this.isCharging = true;
+                    }
+                } else {
+                    this.shakeX = 0; this.shakeY = 0;
+                    const cdx = this.chargeTargetX - this.x, cdy = this.chargeTargetY - this.y;
+                    const cd = Math.sqrt(cdx * cdx + cdy * cdy);
+                    if (cd > 5) {
+                        const spd = this.enraged ? 7 : 5;
+                        this.x += (cdx / cd) * spd;
+                        this.y += (cdy / cd) * spd;
+                        // Damage on contact
+                        if (dist(this, knight) < this.size + 16 && knight.invincible <= 0) {
+                            knight.takeDamage(this.damage);
+                        }
+                    } else {
+                        this.state = 'IDLE'; this.stateTimer = 0;
+                        this.isCharging = false; this.chargeWindup = 0;
+                    }
+                }
+                if (this.stateTimer > 4) { this.state = 'IDLE'; this.stateTimer = 0; this.shakeX = 0; this.shakeY = 0; }
+                break;
+
+            case 'SLAM':
+                if (!this.slamActive) {
+                    if (d > 100) {
+                        this.x += (dx / d) * this.speed * 2;
+                        this.y += (dy / d) * this.speed * 2;
+                    }
+                    if (d <= 120 || this.stateTimer > 2.5) {
+                        this.slamActive = true; this.slamTimer = 0; this.slamShockwave = 0;
+                    }
+                } else {
+                    this.slamTimer += dt;
+                    this.slamShockwave = Math.min(1, this.slamTimer / 0.5);
+                    if (this.slamTimer < dt * 2 && dist(this, knight) < 120) {
+                        knight.takeDamage(this.enraged ? Math.floor(this.damage * 1.3) : this.damage + 10);
+                    }
+                    if (this.slamTimer >= 1.0) {
+                        this.state = 'IDLE'; this.stateTimer = 0; this.slamActive = false;
+                    }
+                }
+                break;
+
+            case 'SPAWN':
+                if (this.stateTimer > 0.5) {
+                    const count = this.enraged ? 5 : 3;
+                    for (let i = 0; i < count; i++) {
+                        const angle = (Math.PI * 2 / count) * i;
+                        const sx = this.x + Math.cos(angle) * 60;
+                        const sy = this.y + Math.sin(angle) * 60;
+                        createSlime(clamp(sx, 20, W - 20), clamp(sy, 20, H - 20), 1);
+                    }
+                    spawnText(this.x, this.y - this.size, 'Summoning!', '#aa00ff');
+                    this.state = 'IDLE'; this.stateTimer = 0;
+                }
+                break;
+
+            case 'ENRAGE':
+                this.shakeX = (Math.random() - 0.5) * 10;
+                this.shakeY = (Math.random() - 0.5) * 10;
+                if (this.stateTimer >= 1.5) { this.shakeX = 0; this.shakeY = 0; this.state = 'IDLE'; this.stateTimer = 0; }
+                break;
+        }
+
+        this.x = clamp(this.x, this.size, W - this.size);
+        this.y = clamp(this.y, this.size, H - this.size);
+    }
+
+    draw(ctx) {
+        if (!this.alive) return;
+        const bx = this.x + this.shakeX, by = this.y + this.shakeY;
+        const pulse = 1 + Math.sin(this.pulseTimer) * 0.05;
+        const sz = this.size * pulse;
+
+        ctx.save();
+        ctx.shadowColor = this.enraged ? '#FF0000' : '#880000';
+        ctx.shadowBlur = 20 + Math.sin(this.pulseTimer * 2) * 10;
+        ctx.fillStyle = this.hitFlash > 0 ? '#fff' : (this.enraged ? '#FF0000' : '#8B0000');
+        ctx.beginPath();
+        ctx.ellipse(bx, by + sz * 0.1, sz, sz * 0.85, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Crown
+        ctx.fillStyle = this.enraged ? '#FFD700' : '#CCAA00';
+        for (let i = 0; i < 5; i++) {
+            const a = -Math.PI * 0.8 + (Math.PI * 0.6 / 4) * i;
+            const sx = bx + Math.cos(a) * sz * 0.7, sy = by + Math.sin(a) * sz * 0.7;
+            ctx.beginPath();
+            ctx.moveTo(sx - 6, sy + 4); ctx.lineTo(sx, sy - 12); ctx.lineTo(sx + 6, sy + 4);
+            ctx.fill();
+        }
+        ctx.restore();
+
+        // Eyes
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.ellipse(bx - sz * 0.3, by - sz * 0.15, 10, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(bx + sz * 0.3, by - sz * 0.15, 10, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        const eyeDist = Math.hypot(knight.x - bx, knight.y - by) || 1;
+        const edx = (knight.x - bx) / eyeDist, edy = (knight.y - by) / eyeDist;
+        ctx.fillStyle = this.enraged ? '#FF0000' : '#000';
+        ctx.beginPath();
+        ctx.arc(bx - sz * 0.3 + edx * 4, by - sz * 0.15 + edy * 3, 5, 0, Math.PI * 2);
+        ctx.arc(bx + sz * 0.3 + edx * 4, by - sz * 0.15 + edy * 3, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Eyebrows
+        ctx.strokeStyle = this.enraged ? '#FF4400' : '#440000'; ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(bx - sz * 0.45, by - sz * 0.35); ctx.lineTo(bx - sz * 0.15, by - sz * 0.25); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(bx + sz * 0.45, by - sz * 0.35); ctx.lineTo(bx + sz * 0.15, by - sz * 0.25); ctx.stroke();
+
+        // Slam shockwave
+        if (this.slamActive && this.slamShockwave > 0 && this.slamShockwave < 1) {
+            ctx.strokeStyle = `rgba(255,100,0,${1 - this.slamShockwave})`;
+            ctx.lineWidth = 4 * (1 - this.slamShockwave);
+            ctx.beginPath();
+            ctx.arc(bx, by, 120 * this.slamShockwave, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        // Charge telegraph
+        if (this.state === 'CHARGE' && this.chargeWindup < 0.8) {
+            ctx.strokeStyle = `rgba(255,0,0,${0.3 + Math.sin(this.pulseTimer * 10) * 0.3})`;
+            ctx.lineWidth = 2; ctx.setLineDash([8, 8]);
+            ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(knight.x, knight.y); ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // State label
+        if (this.state !== 'IDLE') {
+            ctx.fillStyle = 'rgba(255,255,255,0.7)';
+            ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+            const labels = { CHARGE: this.isCharging ? 'CHARGING!' : 'TARGETING...', SLAM: this.slamActive ? 'SLAM!' : 'WINDING UP...', SPAWN: 'SUMMONING', ENRAGE: 'ENRAGING!!' };
+            ctx.fillText(labels[this.state] || '', bx, by - sz - 15);
+        }
+    }
+
+    drawHPBar(ctx) {
+        if (!this.alive) return;
+        const barW = 400, barH = 20, barX = (W - barW) / 2, barY = 15;
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(barX - 4, barY - 4, barW + 8, barH + 28);
+        ctx.font = 'bold 14px Arial'; ctx.textAlign = 'center';
+        ctx.fillStyle = this.enraged ? '#FF4444' : '#FF8888';
+        ctx.fillText(this.enraged ? 'SLIME KING (ENRAGED!)' : 'SLIME KING', W / 2, barY + 8);
+        ctx.fillStyle = '#330000';
+        ctx.fillRect(barX, barY + 12, barW, barH);
+        const ratio = this.hp / this.maxHp;
+        ctx.fillStyle = ratio > 0.6 ? '#CC0000' : ratio > 0.3 ? '#FF6600' : '#FF0000';
+        ctx.fillRect(barX, barY + 12, barW * ratio, barH);
+        ctx.font = 'bold 12px monospace';
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+        ctx.fillText(`${this.hp} / ${this.maxHp}`, W / 2, barY + 12 + barH / 2 + 4);
+        ctx.strokeStyle = this.enraged ? '#FF4400' : '#880000'; ctx.lineWidth = 2;
+        ctx.strokeRect(barX, barY + 12, barW, barH);
+    }
+}
+
+// ========== WAVE MANAGER ==========
+class WaveManager {
+    constructor() {
+        this.boss = null;
+        this.restTimer = 0;
+        this.resting = false;
+        this.announcement = null;
+        this.announceTimer = 0;
+        this.screenShake = 0;
+        this.hpAtWaveStart = 0;
+    }
+
+    getWaveType(n) {
+        if (n % 10 === 0) return 'boss';
+        if (n % 5 === 0) return 'elite';
+        if (n % 3 === 0) return 'swarm';
+        return 'normal';
+    }
+
+    startWave() {
+        const type = this.getWaveType(game.wave);
+        this.resting = false;
+        this.hpAtWaveStart = knight.hp;
+        game.spawnedThisWave = 0;
+        game.waveTimer = 0;
+
+        if (type === 'boss') {
+            this.boss = new BossSlime(game.wave);
+            game.totalThisWave = 0;
+            this.announce('BOSS WAVE', '#FF0000', 15);
+            SFX.boss();
+        } else if (type === 'elite') {
+            game.totalThisWave = Math.max(2, Math.floor(game.wave / 5) + 1);
+            game.isEliteWave = true;
+            this.announce('ELITE WAVE', '#FF8800');
+        } else if (type === 'swarm') {
+            game.totalThisWave = 8 + game.wave * 2;
+            game.isEliteWave = false;
+            game.swarmWave = true;
+            this.announce('SWARM!', '#00FF44');
+        } else {
+            game.totalThisWave = 3 + game.wave * 2;
+            game.isEliteWave = false;
+            game.swarmWave = false;
+            this.announce(`WAVE ${game.wave}`, '#FFFFFF');
+        }
+        SFX.wave();
+    }
+
+    announce(text, color, shake = 0) {
+        this.announcement = text;
+        this.announceColor = color;
+        this.announceTimer = 2.5;
+        this.screenShake = shake;
+    }
+
+    startRest() {
+        this.resting = true;
+        this.restTimer = 3.0;
+
+        // Wave complete celebration
+        spawnText(W / 2, H / 2 - 20, 'WAVE COMPLETE!', '#44ff88');
+        screenFlash = { color: '#44ff88', timer: 0.3 };
+        triggerScreenShake(4);
+        spawnBurstParticles(knight.x, knight.y, '#44ff88', 20, 5);
+        spawnBurstParticles(knight.x, knight.y, '#ffd700', 10, 4);
+
+        // Flawless check
+        if (knight.hp >= this.hpAtWaveStart) {
+            skinManager.flawlessWaves++;
+            setTimeout(() => {
+                spawnText(W / 2, H / 2, 'FLAWLESS!', '#ffd700');
+                screenFlash = { color: '#ffd700', timer: 0.4 };
+                triggerScreenShake(8);
+                spawnBurstParticles(knight.x, knight.y, '#ffd700', 30, 7);
+            }, 500);
+            knight.gainXP(20);
+        }
+
+        // Wave XP
+        knight.gainXP(30 + game.wave * 10);
+
+        // Skill point every 3 waves
+        if (game.wave % 3 === 0) {
+            knight.skillPoints++;
+            spawnText(knight.x, knight.y - 60, 'SKILL POINT!', '#ffd700');
+            screenFlash = { color: '#ffd700', timer: 0.15 };
+        }
+
+        knight.usedSecondWind = false;
+        knight.blocksThisWave = 0;
+        skinManager.checkUnlocks();
+    }
+
+    update(dt) {
+        // Announcement
+        if (this.announceTimer > 0) this.announceTimer -= dt;
+        if (this.screenShake > 0) this.screenShake *= 0.93;
+
+        // Rest period
+        if (this.resting) {
+            this.restTimer -= dt;
+            if (this.restTimer <= 0) {
+                game.wave++;
+                this.startWave();
+            }
+            return;
+        }
+
+        // Boss update
+        if (this.boss) {
+            if (this.boss.alive) this.boss.update(dt);
+        }
+
+        // Spawn slimes
+        if (game.spawnedThisWave < game.totalThisWave) {
+            game.waveTimer += dt;
+            const delay = game.swarmWave ? 0.15 : (game.isEliteWave ? 1.0 : 0.5);
+            if (game.waveTimer > delay) {
+                game.waveTimer = 0;
+                this.spawnOne();
+            }
+        }
+
+        // Check wave complete
+        const allDead = slimes.every(s => s.fsm.current === 'DEAD' || !s.alive);
+        const bossGone = !this.boss || !this.boss.alive;
+        if (allDead && game.spawnedThisWave >= game.totalThisWave && bossGone) {
+            this.startRest();
+        }
+    }
+
+    spawnOne() {
+        const side = Math.floor(Math.random() * 4);
+        let x, y;
+        if (side === 0) { x = Math.random() * W; y = -20; }
+        else if (side === 1) { x = W + 20; y = Math.random() * H; }
+        else if (side === 2) { x = Math.random() * W; y = H + 20; }
+        else { x = -20; y = Math.random() * H; }
+
+        const tier = Math.min(Math.ceil(game.wave / 2), 5);
+        const t = 1 + Math.floor(Math.random() * tier);
+
+        if (game.isEliteWave) {
+            createEliteSlime(x, y, t);
+        } else {
+            createSlime(x, y, game.swarmWave ? 1 : t);
+        }
+        game.spawnedThisWave++;
+    }
+
+    drawAnnouncement(ctx) {
+        if (this.announceTimer > 0) {
+            let alpha = Math.min(1, this.announceTimer / 0.5);
+            if (this.announceTimer > 2) alpha = (2.5 - this.announceTimer) / 0.5;
+            alpha = clamp(alpha, 0, 1);
+            const scale = 1 + Math.max(0, (2.5 - 2) - (2.5 - this.announceTimer)) * 0.5;
+
+            ctx.save();
+            ctx.translate(W / 2, H / 2 - 40);
+            ctx.scale(Math.min(scale, 1.5), Math.min(scale, 1.5));
+            ctx.globalAlpha = alpha;
+            ctx.font = 'bold 60px Arial';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.strokeStyle = '#000'; ctx.lineWidth = 6;
+            ctx.strokeText(this.announcement, 0, 0);
+            ctx.fillStyle = this.announceColor;
+            ctx.fillText(this.announcement, 0, 0);
+            ctx.globalAlpha = 1;
+            ctx.restore();
+        }
+
+        // Rest countdown
+        if (this.resting) {
+            ctx.save();
+            ctx.font = 'bold 24px Arial'; ctx.textAlign = 'center';
+            ctx.fillStyle = '#fff';
+            ctx.fillText(`Next wave in ${Math.ceil(this.restTimer)}...`, W / 2, H / 2 + 20);
+            const barW = 200, barH = 6, barX = W / 2 - barW / 2, barY = H / 2 + 30;
+            ctx.fillStyle = 'rgba(255,255,255,0.2)';
+            ctx.fillRect(barX, barY, barW, barH);
+            ctx.fillStyle = '#00ff88';
+            ctx.fillRect(barX, barY, barW * (this.restTimer / 3), barH);
+            ctx.restore();
+        }
+    }
+
+    getScreenShake() {
+        if (this.screenShake <= 0.5) return { x: 0, y: 0 };
+        return { x: (Math.random() - 0.5) * this.screenShake, y: (Math.random() - 0.5) * this.screenShake };
+    }
+
+    damageBoss(amount) {
+        if (this.boss && this.boss.alive) {
+            this.boss.takeDamage(amount);
+            spawnText(this.boss.x, this.boss.y - this.boss.size, `-${amount}`, '#ffff00');
+        }
+    }
+}
+
+let waveManager = new WaveManager();
+
 // ========== GAME STATE ==========
 let slimes = [];
-let game = { wave: 1, kills: 0, running: false, waveTimer: 0, spawnedThisWave: 0, totalThisWave: 0 };
-
-function spawnWave() {
-    const count = 3 + game.wave * 2;
-    const tier = Math.min(Math.ceil(game.wave / 2), 5);
-    game.totalThisWave = count;
-    game.spawnedThisWave = 0;
-    game.waveTimer = 0;
-    SFX.wave();
-    spawnText(W / 2, H / 2 - 40, `Wave ${game.wave}`, '#ffaa00');
-}
-
-function spawnOneSlime() {
-    const tier = Math.min(Math.ceil(game.wave / 2), 5);
-    // Spawn at edges
-    const side = Math.floor(Math.random() * 4);
-    let x, y;
-    if (side === 0) { x = Math.random() * W; y = -20; }
-    else if (side === 1) { x = W + 20; y = Math.random() * H; }
-    else if (side === 2) { x = Math.random() * W; y = H + 20; }
-    else { x = -20; y = Math.random() * H; }
-
-    const t = 1 + Math.floor(Math.random() * tier);
-    slimes.push(createSlime(x, y, t));
-    game.spawnedThisWave++;
-}
+let game = { wave: 1, kills: 0, running: false, waveTimer: 0, spawnedThisWave: 0, totalThisWave: 0, isEliteWave: false, swarmWave: false };
 
 // ========== ARENA ==========
 function drawArena() {
-    // Background
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(0, 0, W, H);
-
-    // Grid
     ctx.strokeStyle = 'rgba(255,255,255,0.03)';
     ctx.lineWidth = 1;
     for (let x = 0; x < W; x += 40) {
@@ -845,8 +2428,6 @@ function drawArena() {
     for (let y = 0; y < H; y += 40) {
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
     }
-
-    // Arena border glow
     ctx.strokeStyle = 'rgba(100, 100, 255, 0.15)';
     ctx.lineWidth = 4;
     ctx.strokeRect(4, 4, W - 8, H - 8);
@@ -859,15 +2440,21 @@ function updateHUD() {
     document.getElementById('wave-display').textContent = game.wave;
     document.getElementById('kills-display').textContent = game.kills;
     document.getElementById('combo-display').textContent = knight ? knight.combo : 0;
+    document.getElementById('xp-display').textContent = knight ? knight.xp : 0;
+    document.getElementById('sp-display').textContent = knight ? knight.skillPoints : 0;
 
     if (knight) {
+        const whud = document.getElementById('weapon-hud');
+        whud.textContent = knight.weapon.name;
+        whud.style.borderColor = RARITY_COLORS[knight.weapon.rarity];
+        whud.style.color = RARITY_COLORS[knight.weapon.rarity];
+
         const ksEl = document.getElementById('knight-state');
         const state = knight.fsm.current;
         ksEl.textContent = state;
         ksEl.className = 'state state-' + state.toLowerCase();
     }
 
-    // Nearest slime state
     const alive = slimes.filter(s => s.fsm.current !== 'DEAD');
     if (alive.length > 0 && knight) {
         alive.sort((a, b) => dist(a, knight) - dist(b, knight));
@@ -887,62 +2474,133 @@ let lastTime = 0;
 function gameLoop(timestamp) {
     if (!game.running) return;
 
-    const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+    let dt = Math.min((timestamp - lastTime) / 1000, 0.05);
     lastTime = timestamp;
 
-    // Update knight
-    if (knight) {
-        knight.fsm.update(dt);
-        if (knight.invincible > 0) knight.invincible -= dt;
-        if (knight.comboTimer > 0) {
-            knight.comboTimer -= dt;
-            if (knight.comboTimer <= 0) knight.combo = 0;
+    // Hit freeze - pause game briefly on big hits
+    if (hitFreeze > 0) {
+        hitFreeze -= dt;
+        // Still draw but don't update game logic
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+
+    // Slow-motion
+    if (slowMo > 0) {
+        slowMo -= dt;
+        dt *= slowMoFactor;
+    }
+
+    // Update juice timers
+    if (screenFlash) { screenFlash.timer -= dt; if (screenFlash.timer <= 0) screenFlash = null; }
+    if (screenShakeAmount > 0) screenShakeAmount *= 0.88;
+    if (killStreakTimer > 0) { killStreakTimer -= dt; if (killStreakTimer <= 0) killStreak = 0; }
+
+    // Skip game logic updates when menus open
+    if (!showSkillTree && !showSkinMenu) {
+        // Update knight
+        if (knight && knight.fsm.current !== 'DEAD') {
+            knight.fsm.update(dt);
+            if (knight.invincible > 0) knight.invincible -= dt;
+            if (knight.dodgeCooldown > 0) knight.dodgeCooldown -= dt;
+            if (knight.shadowStrikeTimer > 0) knight.shadowStrikeTimer -= dt;
+            if (knight.speedBoostTimer > 0) knight.speedBoostTimer -= dt;
+            if (knight.comboTimer > 0) {
+                knight.comboTimer -= dt;
+                if (knight.comboTimer <= 0) knight.combo = 0;
+            }
+            // Regen
+            const regenInt = skillTree.getRegenInterval();
+            if (regenInt > 0 && knight.hp < knight.maxHp) {
+                knight.regenTimer += dt;
+                if (knight.regenTimer >= regenInt) {
+                    knight.regenTimer -= regenInt;
+                    knight.hp = Math.min(knight.maxHp, knight.hp + 1);
+                }
+            }
+            // Weapon pickup
+            checkWeaponPickup(knight);
         }
+
+        // Update wave manager
+        waveManager.update(dt);
+
+        // Update slimes
+        slimes.forEach(s => {
+            s.fsm.update(dt);
+            updateStatusEffects(s, dt);
+        });
+
+        // Remove dead slimes after animation
+        slimes = slimes.filter(s => !(s.fsm.current === 'DEAD' && s.fsm.timer > 0.5));
+
+        // Update weapon drops (immunity timers)
+        updateWeaponDrops(dt);
+
+        // Update effects
+        updateParticles();
+        updateFloatingTexts();
     }
 
-    // Spawn slimes gradually
-    if (game.spawnedThisWave < game.totalThisWave) {
-        game.waveTimer += dt;
-        if (game.waveTimer > 0.5) {
-            game.waveTimer = 0;
-            spawnOneSlime();
-        }
-    }
+    // Draw - combine screen shake sources
+    const waveShake = waveManager.getScreenShake();
+    const totalShakeX = waveShake.x + (screenShakeAmount > 0.5 ? (Math.random() - 0.5) * screenShakeAmount : 0);
+    const totalShakeY = waveShake.y + (screenShakeAmount > 0.5 ? (Math.random() - 0.5) * screenShakeAmount : 0);
+    ctx.save();
+    ctx.translate(totalShakeX, totalShakeY);
 
-    // Update slimes
-    slimes.forEach(s => s.fsm.update(dt));
-
-    // Remove dead slimes after animation
-    slimes = slimes.filter(s => !(s.fsm.current === 'DEAD' && s.fsm.timer > 0.5));
-
-    // Check wave complete
-    const alive = slimes.filter(s => s.fsm.current !== 'DEAD');
-    if (alive.length === 0 && game.spawnedThisWave >= game.totalThisWave) {
-        game.wave++;
-        spawnWave();
-    }
-
-    // Update effects
-    updateParticles();
-    updateFloatingTexts();
-
-    // Draw
     drawArena();
+    drawWeaponDrops();
     slimes.forEach(s => drawSlime(s));
+    if (waveManager.boss) waveManager.boss.draw(ctx);
     if (knight && knight.fsm.current !== 'DEAD') drawKnight(knight);
     drawParticles();
     drawFloatingTexts();
 
-    // Attack range indicator when attacking
+    // Attack range indicator with juicy glow
     if (knight && knight.fsm.current === 'ATTACKING') {
-        ctx.strokeStyle = 'rgba(255,100,50,0.2)';
-        ctx.lineWidth = 1;
+        const arc = skillTree.getAttackArc() || knight.weapon.arc;
+        const rc = RARITY_COLORS[knight.weapon.rarity];
+        ctx.strokeStyle = rc + '44';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = rc;
+        ctx.shadowBlur = 8;
         ctx.beginPath();
-        ctx.arc(knight.x, knight.y, knight.attackRange, knight.attackAngle - Math.PI / 3, knight.attackAngle + Math.PI / 3);
+        ctx.arc(knight.x, knight.y, knight.weapon.range, knight.attackAngle - arc / 2, knight.attackAngle + arc / 2);
         ctx.lineTo(knight.x, knight.y);
         ctx.closePath();
         ctx.stroke();
+        ctx.shadowBlur = 0;
     }
+
+    ctx.restore();
+
+    // Screen flash overlay
+    drawScreenFlash();
+
+    // Kill streak HUD
+    drawKillStreakHUD();
+
+    // Combo counter (big, centered when high)
+    if (knight && knight.combo >= 5) {
+        ctx.save();
+        const comboSize = Math.min(40, 20 + knight.combo);
+        ctx.font = `bold ${comboSize}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.globalAlpha = 0.6 + Math.sin(Date.now() * 0.01) * 0.2;
+        ctx.fillStyle = knight.combo >= 15 ? '#ff0044' : knight.combo >= 10 ? '#ff6600' : '#ffaa00';
+        ctx.fillText(`${knight.combo}x COMBO`, W / 2, H - 50);
+        ctx.globalAlpha = 1;
+        ctx.restore();
+    }
+
+    // UI overlays (not affected by shake)
+    waveManager.drawAnnouncement(ctx);
+    if (waveManager.boss && waveManager.boss.alive) waveManager.boss.drawHPBar(ctx);
+
+    // Skill tree / skin menu overlays
+    if (showSkillTree) skillTree.draw(ctx);
+    if (showSkinMenu) skinManager.draw(ctx);
 
     updateHUD();
     requestAnimationFrame(gameLoop);
@@ -958,12 +2616,18 @@ function startGame() {
     slimes = [];
     particles = [];
     floatingTexts = [];
-    game = { wave: 1, kills: 0, running: true, waveTimer: 0, spawnedThisWave: 0, totalThisWave: 0 };
+    weaponDrops = [];
+    game = { wave: 1, kills: 0, running: true, waveTimer: 0, spawnedThisWave: 0, totalThisWave: 0, isEliteWave: false, swarmWave: false };
     lastTime = performance.now();
     lastTransition = '...';
+    skillTree = new SkillTree();
+    skinManager = new SkinManager();
+    waveManager = new WaveManager();
+    showSkillTree = false;
+    showSkinMenu = false;
 
     audioCtx.resume();
-    spawnWave();
+    waveManager.startWave();
     requestAnimationFrame(gameLoop);
 }
 
@@ -971,6 +2635,7 @@ function showGameOver() {
     game.running = false;
     document.getElementById('final-wave').textContent = game.wave;
     document.getElementById('final-kills').textContent = game.kills;
+    document.getElementById('final-xp').textContent = knight ? knight.xp : 0;
     document.getElementById('game-over-screen').classList.remove('hidden');
 }
 </script>
